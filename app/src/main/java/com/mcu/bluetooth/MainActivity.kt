@@ -36,7 +36,7 @@ import java.util.UUID
 class MainActivity : AppCompatActivity() {
 
     // A custom 16-bit UUID to identify our app's broadcasts, keeping the packet size small.
-    private val SERVICE_UUID: UUID = UUID.fromString("00001234-0000-1000-8000-00805F9B34FB")
+    private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
 
     // --- Bluetooth Components ---
     private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
@@ -53,7 +53,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var receivedBroadcastsAdapter: ArrayAdapter<String>
 
     // --- State Management ---
-    private val receivedMessages = mutableMapOf<String, String>() // Map<DeviceAddress, Message>
+    private val latestMessages = mutableMapOf<String, String>() // Map<DeviceAddress, Message>
+    private val historyMessages = mutableListOf<String>()       // List of historical messages
 
     // --- Permissions ---
     private val requestBluetoothPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
@@ -76,7 +77,7 @@ class MainActivity : AppCompatActivity() {
         // Ensure Bluetooth is enabled
         if (!bluetoothAdapter.isEnabled) {
             if(hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-                 startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             }
         }
     }
@@ -118,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onStartFailure(errorCode: Int) {
-             val errorMessage = when (errorCode) {
+            val errorMessage = when (errorCode) {
                 ADVERTISE_FAILED_DATA_TOO_LARGE -> "Broadcast Failed: Data is too large. Try a shorter message."
                 ADVERTISE_FAILED_ALREADY_STARTED -> "Broadcast Failed: Already started."
                 else -> "Broadcast Failed (Code: $errorCode)"
@@ -156,7 +157,7 @@ class MainActivity : AppCompatActivity() {
         val parcelUuid = ParcelUuid(SERVICE_UUID)
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
-            .addServiceUuid(parcelUuid) // ** THE FIX **: Explicitly advertise the service UUID
+            .addServiceUuid(parcelUuid)
             .addServiceData(parcelUuid, messageBytes)
             .build()
 
@@ -181,8 +182,22 @@ class MainActivity : AppCompatActivity() {
                 val message = String(serviceData, Charset.forName("UTF-8"))
                 val deviceAddress = result.device.address
 
-                receivedMessages[deviceAddress] = message
-                updateListView()
+                // 檢查是否需要更新歷史紀錄
+                val previousMessage = latestMessages[deviceAddress]
+                if (previousMessage != null && previousMessage != message) {
+                    // 如果訊息改變了，將舊訊息加入歷史紀錄
+                    historyMessages.add(0, "$previousMessage\n[$deviceAddress]")
+                    // 限制歷史紀錄數量，避免過多
+                    if (historyMessages.size > 50) {
+                        historyMessages.removeAt(historyMessages.lastIndex)
+                    }
+                }
+
+                // 更新最新訊息
+                if (latestMessages[deviceAddress] != message) {
+                    latestMessages[deviceAddress] = message
+                    updateListView()
+                }
             }
         }
 
@@ -199,8 +214,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // 清空列表以開始新的掃描
+        latestMessages.clear()
+        historyMessages.clear()
+        updateListView()
+
         val scanFilter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setServiceData(ParcelUuid(SERVICE_UUID), null)
             .build()
 
         val settings = ScanSettings.Builder()
@@ -219,7 +239,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateListView() {
-        val displayList = receivedMessages.map { (address, message) -> "$message\n[$address]" }
+        val displayList = mutableListOf<String>()
+
+        if (latestMessages.isNotEmpty()) {
+            displayList.add("=== 最新訊息 (Latest) ===")
+            for ((address, message) in latestMessages) {
+                displayList.add("$message\n[$address]")
+            }
+        }
+
+        if (historyMessages.isNotEmpty()) {
+            if (displayList.isNotEmpty()) {
+                displayList.add("") // 空行分隔
+            }
+            displayList.add("=== 歷史訊息 (History) ===")
+            displayList.addAll(historyMessages)
+        }
+
         receivedBroadcastsAdapter.clear()
         receivedBroadcastsAdapter.addAll(displayList)
         receivedBroadcastsAdapter.notifyDataSetChanged()
