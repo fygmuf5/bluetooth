@@ -35,34 +35,29 @@ import java.util.UUID
 @SuppressLint("MissingPermission") // We check permissions dynamically
 class MainActivity : AppCompatActivity() {
 
-    // A custom 16-bit UUID to identify our app's broadcasts, keeping the packet size small.
     private val SERVICE_UUID: UUID = UUID.fromString("00001234-0000-1000-8000-00805F9B34FB")
 
-    // --- Bluetooth Components ---
     private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
     private val bluetoothAdapter: BluetoothAdapter by lazy { bluetoothManager.adapter }
     private val bleAdvertiser: BluetoothLeAdvertiser by lazy { bluetoothAdapter.bluetoothLeAdvertiser }
     private val bleScanner: BluetoothLeScanner by lazy { bluetoothAdapter.bluetoothLeScanner }
 
-    // --- UI Components ---
     private lateinit var statusTextView: TextView
     private lateinit var messageEditText: EditText
     private lateinit var broadcastButton: Button
     private lateinit var scanToggleButton: ToggleButton
+    private lateinit var goToHeatmapButton: Button
     private lateinit var devicesListView: ListView
     private lateinit var receivedBroadcastsAdapter: ArrayAdapter<String>
 
-    // --- State Management ---
-    private val receivedMessages = mutableMapOf<String, String>() // Map<DeviceAddress, Message>
+    private val receivedMessages = mutableMapOf<String, String>()
 
-    // --- Permissions ---
     private val requestBluetoothPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
         if (perms.values.any { !it }) {
             Toast.makeText(this, "Required Bluetooth permissions not granted", Toast.LENGTH_LONG).show()
         }
     }
 
-    // --- Activity Lifecycle ---
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -73,7 +68,6 @@ class MainActivity : AppCompatActivity() {
             requestBluetoothPermissions.launch(getRequiredBluetoothPermissions())
         }
 
-        // Ensure Bluetooth is enabled
         if (!bluetoothAdapter.isEnabled) {
             if(hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
                  startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
@@ -83,7 +77,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        // Stop scanning and advertising to save battery when the app is not in the foreground
         if (hasPermission(Manifest.permission.BLUETOOTH_SCAN) && scanToggleButton.isChecked) {
             stopBleScan()
             scanToggleButton.isChecked = false
@@ -98,6 +91,7 @@ class MainActivity : AppCompatActivity() {
         messageEditText = findViewById(R.id.message_edittext)
         broadcastButton = findViewById(R.id.broadcast_button)
         scanToggleButton = findViewById(R.id.scan_toggle_button)
+        goToHeatmapButton = findViewById(R.id.go_to_heatmap_button)
         devicesListView = findViewById(R.id.devices_listview)
         receivedBroadcastsAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1)
         devicesListView.adapter = receivedBroadcastsAdapter
@@ -109,57 +103,41 @@ class MainActivity : AppCompatActivity() {
             if (isChecked) startBleScan()
             else stopBleScan()
         }
+        // 跳轉到熱點圖 Activity
+        goToHeatmapButton.setOnClickListener {
+            val intent = Intent(this, HeatmapActivity::class.java)
+            startActivity(intent)
+        }
     }
 
-    // --- BLE Advertising ---
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
             statusTextView.text = "Status: Broadcasting"
         }
-
         override fun onStartFailure(errorCode: Int) {
-             val errorMessage = when (errorCode) {
-                ADVERTISE_FAILED_DATA_TOO_LARGE -> "Broadcast Failed: Data is too large. Try a shorter message."
-                ADVERTISE_FAILED_ALREADY_STARTED -> "Broadcast Failed: Already started."
-                else -> "Broadcast Failed (Code: $errorCode)"
-            }
-            statusTextView.text = "Status: $errorMessage"
+            statusTextView.text = "Status: Broadcast Failed ($errorCode)"
         }
     }
 
     private fun broadcastMessage() {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) {
-            Toast.makeText(this, "BLUETOOTH_ADVERTISE permission needed", Toast.LENGTH_SHORT).show()
-            return
-        }
-
+        if (!hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) return
         val message = messageEditText.text.toString()
-        if (message.isBlank()) {
-            Toast.makeText(this, "Message cannot be empty", Toast.LENGTH_SHORT).show()
-            return
-        }
-
+        if (message.isBlank()) return
         val messageBytes = message.toByteArray(Charset.forName("UTF-8"))
-        if (messageBytes.size > 20) { // Keep payload small
-            Toast.makeText(this, "Message is too long to broadcast (max 20 bytes)", Toast.LENGTH_LONG).show()
-            return
-        }
+        if (messageBytes.size > 20) return
 
         stopBleAdvertising()
-
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .setConnectable(false)
             .build()
 
         val parcelUuid = ParcelUuid(SERVICE_UUID)
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
-            .addServiceUuid(parcelUuid) // ** THE FIX **: Explicitly advertise the service UUID
+            .addServiceUuid(parcelUuid)
             .addServiceData(parcelUuid, messageBytes)
             .build()
-
         bleAdvertiser.startAdvertising(settings, data, advertiseCallback)
     }
 
@@ -170,43 +148,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- BLE Scanning ---
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            super.onScanResult(callbackType, result)
             val scanRecord = result.scanRecord ?: return
-
             val serviceData = scanRecord.getServiceData(ParcelUuid(SERVICE_UUID))
             if (serviceData != null) {
                 val message = String(serviceData, Charset.forName("UTF-8"))
-                val deviceAddress = result.device.address
-
-                receivedMessages[deviceAddress] = message
+                receivedMessages[result.device.address] = message
                 updateListView()
             }
-        }
-
-        override fun onScanFailed(errorCode: Int) {
-            statusTextView.text = "Status: Scan Failed (Code: $errorCode)"
-            scanToggleButton.isChecked = false
         }
     }
 
     private fun startBleScan() {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
-            Toast.makeText(this, "BLUETOOTH_SCAN permission needed", Toast.LENGTH_SHORT).show()
-            scanToggleButton.isChecked = false
-            return
-        }
-
-        val scanFilter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(SERVICE_UUID))
-            .build()
-
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
+        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) return
+        val scanFilter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
+        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         bleScanner.startScan(listOf(scanFilter), settings, scanCallback)
         statusTextView.text = "Status: Scanning..."
     }
@@ -225,25 +182,11 @@ class MainActivity : AppCompatActivity() {
         receivedBroadcastsAdapter.notifyDataSetChanged()
     }
 
-    // --- Permission Helpers ---
-    private fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
-
-    private fun hasRequiredBluetoothPermissions(): Boolean {
-        return getRequiredBluetoothPermissions().all { permission ->
-            hasPermission(permission)
-        }
-    }
-
-    private fun getRequiredBluetoothPermissions(): Array<String> = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> arrayOf(
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.BLUETOOTH_CONNECT // Needed for enabling bluetooth adapter
-        )
-        else -> arrayOf(
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADMIN,
-            Manifest.permission.ACCESS_FINE_LOCATION // Scanning on older versions needs location
-        )
+    private fun hasPermission(p: String): Boolean = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+    private fun hasRequiredBluetoothPermissions(): Boolean = getRequiredBluetoothPermissions().all { hasPermission(it) }
+    private fun getRequiredBluetoothPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
+    } else {
+        arrayOf(Manifest.permission.BLUETOOTH, Manifest.permission.BLUETOOTH_ADMIN, Manifest.permission.ACCESS_FINE_LOCATION)
     }
 }

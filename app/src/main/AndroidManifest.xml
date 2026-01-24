@@ -32,6 +32,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 獨立的熱點圖 Activity -->
+        <activity
+            android:name=".HeatmapActivity"
+            android:label="學生分布熱點圖"
+            android:exported="false" />
+
     </application>
 
 </manifest>

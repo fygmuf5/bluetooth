@@ -51,13 +51,24 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <Button
+        android:id="@+id/go_to_heatmap_button"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="進入學生分布熱點圖"
+        android:backgroundTint="#FF9800"
+        app:layout_constraintTop_toBottomOf="@id/scan_toggle_button"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <TextView
         android:id="@+id/received_header"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
         android:text="Received Broadcasts:"
-        app:layout_constraintTop_toBottomOf="@id/scan_toggle_button"
+        app:layout_constraintTop_toBottomOf="@id/go_to_heatmap_button"
         app:layout_constraintStart_toStartOf="parent" />
 
     <ListView
