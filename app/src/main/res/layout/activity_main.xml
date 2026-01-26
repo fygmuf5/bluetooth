@@ -40,6 +40,17 @@
         app:layout_constraintBottom_toBottomOf="@id/message_edittext"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <Button
+        android:id="@+id/signal_only_button"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="發送點名訊號"
+        android:backgroundTint="#4CAF50"
+        app:layout_constraintTop_toBottomOf="@id/message_edittext"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <ToggleButton
         android:id="@+id/scan_toggle_button"
         android:layout_width="0dp"
@@ -47,7 +58,7 @@
         android:layout_marginTop="16dp"
         android:textOn="Stop Scanning"
         android:textOff="Start Scanning"
-        app:layout_constraintTop_toBottomOf="@id/message_edittext"
+        app:layout_constraintTop_toBottomOf="@id/signal_only_button"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
