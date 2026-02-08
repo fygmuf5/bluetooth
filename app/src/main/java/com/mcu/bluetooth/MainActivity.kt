@@ -11,9 +11,11 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
+import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.Group
 import androidx.core.content.ContextCompat
 import java.nio.charset.Charset
 import java.security.MessageDigest
@@ -42,7 +44,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scanToggleButton: ToggleButton
     private lateinit var goToHeatmapButton: Button
     private lateinit var devicesListView: ListView
+    private lateinit var backToRoleButton: Button
     private lateinit var receivedBroadcastsAdapter: ArrayAdapter<String>
+
+    private lateinit var studentGroup: Group
+    private lateinit var teacherGroup: Group
+
+    private var currentRole: String? = null
 
     private val latestMessages = mutableMapOf<String, String>()
     private val historyMessages = Collections.synchronizedList(mutableListOf<String>())
@@ -54,7 +62,11 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        currentRole = intent.getStringExtra("EXTRA_ROLE")
+
         initializeUI()
+        setupRoleUI()
         setupListeners()
 
         if (!hasRequiredBluetoothPermissions()) {
@@ -70,23 +82,54 @@ class MainActivity : AppCompatActivity() {
         scanToggleButton = findViewById(R.id.scan_toggle_button)
         goToHeatmapButton = findViewById(R.id.go_to_heatmap_button)
         devicesListView = findViewById(R.id.devices_listview)
+        backToRoleButton = findViewById(R.id.back_to_role_selection)
+        studentGroup = findViewById(R.id.student_group)
+        teacherGroup = findViewById(R.id.teacher_group)
+
         receivedBroadcastsAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1)
         devicesListView.adapter = receivedBroadcastsAdapter
     }
 
+    private fun setupRoleUI() {
+        when (currentRole) {
+            "TEACHER" -> {
+                teacherGroup.visibility = View.VISIBLE
+                studentGroup.visibility = View.GONE
+                statusTextView.text = "身份: 老師 (接收模式)"
+            }
+            "STUDENT" -> {
+                teacherGroup.visibility = View.GONE
+                studentGroup.visibility = View.VISIBLE
+                statusTextView.text = "身份: 學生 (發送模式)"
+            }
+            else -> {
+                // Fallback to role selection if something is wrong
+                startActivity(Intent(this, RoleSelectionActivity::class.java))
+                finish()
+            }
+        }
+    }
+
     private fun setupListeners() {
-        // 發送自定義文字廣播
+        // 學生功能：發送廣播
         broadcastButton.setOnClickListener { broadcastSecureMessage(messageEditText.text.toString()) }
-        
-        // 只發送點名訊號 (不清除輸入框)
         signalOnlyButton.setOnClickListener { broadcastSecureMessage(ROLLCALL_SIGNAL) }
 
+        // 老師功能：掃描與熱點圖
         scanToggleButton.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) startBleScan() else stopBleScan()
         }
 
         goToHeatmapButton.setOnClickListener {
             startActivity(Intent(this, HeatmapActivity::class.java))
+        }
+
+        // 返回功能
+        backToRoleButton.setOnClickListener {
+            stopBleScan()
+            stopBleAdvertising()
+            startActivity(Intent(this, RoleSelectionActivity::class.java))
+            finish()
         }
     }
 
@@ -123,14 +166,16 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        try { bleAdvertiser.stopAdvertising(object : AdvertiseCallback(){}) } catch(e: Exception){}
+        stopBleAdvertising()
         
         val settings = AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY).setConnectable(false).build()
         val data = AdvertiseData.Builder().addServiceUuid(ParcelUuid(SERVICE_UUID)).addServiceData(ParcelUuid(SERVICE_UUID), payload).build()
 
         bleAdvertiser.startAdvertising(settings, data, object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-                statusTextView.text = if (message == ROLLCALL_SIGNAL) "Status: Sending Signal..." else "Status: Secure Broadcasting..."
+                runOnUiThread {
+                    statusTextView.text = if (message == ROLLCALL_SIGNAL) "Status: Sending Signal..." else "Status: Secure Broadcasting..."
+                }
             }
         })
     }
@@ -183,6 +228,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startBleScan() {
+        if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) return
         latestMessages.clear()
         historyMessages.clear()
         updateListView()
@@ -216,6 +262,12 @@ class MainActivity : AppCompatActivity() {
         receivedBroadcastsAdapter.clear()
         receivedBroadcastsAdapter.addAll(displayList)
         receivedBroadcastsAdapter.notifyDataSetChanged()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopBleScan()
+        stopBleAdvertising()
     }
 
     private fun hasPermission(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED

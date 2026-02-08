@@ -32,7 +32,10 @@ class HeatmapActivity : AppCompatActivity() {
 
     private lateinit var heatmapView: HeatmapView
     private lateinit var studentCountTv: TextView
-    
+
+    // 儲存每個裝置的卡爾曼濾波器，讓位置移動更平滑
+    private val kalmanFilters = mutableMapOf<String, KalmanFilter>()
+
     // 儲存裝置資訊：地址 -> Pair(距離(米), 最後更新時間)
     private val deviceData = mutableMapOf<String, Pair<Float, Long>>()
     private val handler = Handler(Looper.getMainLooper())
@@ -50,7 +53,6 @@ class HeatmapActivity : AppCompatActivity() {
     }
 
     private fun startScanning() {
-        // 設定過濾器：只掃描我們 App 專屬 UUID 的訊號 (包含點名訊號與加密訊息)
         val scanFilter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
@@ -65,20 +67,27 @@ class HeatmapActivity : AppCompatActivity() {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val address = result.device.address
-            val rssi = result.rssi
-            
-            // 使用 RSSI 估算距離 (公尺)
-            // 公式：d = 10^((Measured Power - RSSI) / (10 * N))
-            val distance = 10.0.pow((-59 - rssi) / (10.0 * 2.0)).toFloat()
-            
+            val rssi = result.rssi.toDouble()
+
+            // 1. 取得或建立該裝置的濾波器
+            val filter = kalmanFilters.getOrPut(address) { KalmanFilter(processNoise = 0.008, measurementNoise = 0.8) }
+
+            // 2. 進行濾波，平滑化 RSSI 訊號
+            val filteredRssi = filter.filter(rssi)
+
+            // 3. 使用濾波後的 RSSI 估算距離 (公尺)
+            // Measured Power (1米處的RSSI) 假設為 -59
+            val distance = 10.0.pow((-59.0 - filteredRssi) / (10.0 * 2.0)).toFloat()
+
             deviceData[address] = Pair(distance, System.currentTimeMillis())
-            updateUI()
+
+            runOnUiThread { updateUI() }
         }
     }
 
     private fun updateUI() {
-        studentCountTv.text = "本班掃描中 - 偵測到學生數: ${deviceData.size}"
-        
+        studentCountTv.text = "本班監測中 - 目前在線學生: ${deviceData.size}"
+
         // 將距離數據傳給自定義 View 繪圖
         val distances = deviceData.mapValues { it.value.first }
         heatmapView.updateDevices(distances)
@@ -88,9 +97,14 @@ class HeatmapActivity : AppCompatActivity() {
         handler.postDelayed(object : Runnable {
             override fun run() {
                 val currentTime = System.currentTimeMillis()
-                // 如果裝置超過 5 秒沒發送任何訊號，就從地圖移除
-                val changed = deviceData.entries.removeIf { currentTime - it.value.second > 5000 }
-                if (changed) updateUI()
+                // 如果裝置超過 8 秒沒發送任何訊號，就視為離開
+                val removed = deviceData.entries.removeIf { currentTime - it.value.second > 8000 }
+                if (removed) {
+                    // 同步清理濾波器
+                    val activeAddresses = deviceData.keys
+                    kalmanFilters.keys.removeIf { !activeAddresses.contains(it) }
+                    updateUI()
+                }
                 handler.postDelayed(this, 1000)
             }
         }, 1000)
@@ -98,7 +112,7 @@ class HeatmapActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        bleScanner.stopScan(scanCallback)
+        try { bleScanner.stopScan(scanCallback) } catch(e: Exception) {}
         handler.removeCallbacksAndMessages(null)
     }
 }
