@@ -18,22 +18,27 @@ class HeatmapView @JvmOverloads constructor(
     }
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.GRAY
-        textSize = 28f
+        color = Color.WHITE
+        textSize = 34f
         textAlign = Paint.Align.CENTER
+        isFakeBoldText = true
     }
 
     private val wallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.DKGRAY
+        color = Color.GRAY
         style = Paint.Style.STROKE
-        strokeWidth = 20f
-        strokeCap = Paint.Cap.ROUND
+        strokeWidth = 10f
     }
 
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E0E0E0")
+        color = Color.parseColor("#333333")
         style = Paint.Style.STROKE
         strokeWidth = 2f
+    }
+
+    init {
+        // 使用深色背景讓色點更突出
+        setBackgroundColor(Color.parseColor("#1A1A1A"))
     }
 
     fun updateDevices(distances: Map<String, Float>) {
@@ -47,11 +52,10 @@ class HeatmapView @JvmOverloads constructor(
 
         val padding = 80f
         val roomWidth = width - 2 * padding
-        val roomHeight = height - 2 * padding
         
-        // 1. 繪製背景網格 (模擬地磚)
-        val metersX = 8f // 假設教室寬 8 米
-        val metersY = 10f // 假設教室長 10 米
+        // 1. 繪製背景網格
+        val metersX = 8f
+        val metersY = 10f
         val pxPerMeter = roomWidth / metersX
         
         for (i in 0..metersX.toInt()) {
@@ -63,58 +67,52 @@ class HeatmapView @JvmOverloads constructor(
             canvas.drawLine(padding, y, padding + metersX * pxPerMeter, y, gridPaint)
         }
 
-        // 2. 繪製教室牆壁 (封閉矩形)
+        // 2. 繪製教室邊界
         val rect = RectF(padding, padding, padding + roomWidth, padding + (metersY * pxPerMeter))
         canvas.drawRect(rect, wallPaint)
 
-        // 3. 老師（接收端）位置：設定在底部的講台
+        // 3. 繪製老師位置 (藍色大方塊或圓點)
         val teacherX = padding + roomWidth / 2f
         val teacherY = rect.bottom - 40f
+        studentPaint.color = Color.parseColor("#2196F3") // 亮藍色
+        canvas.drawCircle(teacherX, teacherY, 25f, studentPaint)
+        canvas.drawText("老師 (接收端)", teacherX, teacherY + 60f, textPaint)
 
-        textPaint.color = Color.BLACK
-        textPaint.isFakeBoldText = true
-        canvas.drawText("【 講台 / 老師 】", teacherX, teacherY + 60f, textPaint)
-        studentPaint.color = Color.BLUE
-        canvas.drawCircle(teacherX, teacherY, 20f, studentPaint)
-
-        // 4. 繪製學生位置
+        // 4. 繪製學生位置 (實心色點)
         deviceDistances.forEach { (address, distance) ->
-            // 學生分佈在老師前方的區域 (向上方發散)
             val stableAngle = 240.0 + (Math.abs(address.hashCode()) % 60)
             val angleRad = Math.toRadians(stableAngle)
 
-            // 計算座標 (從老師位置出發)
             val radiusPx = distance * pxPerMeter
             var x = teacherX + (radiusPx * cos(angleRad)).toFloat()
             var y = teacherY + (radiusPx * sin(angleRad)).toFloat()
 
-            // 邊界限制
-            x = x.coerceIn(padding + 40f, rect.right - 40f)
-            y = y.coerceIn(padding + 40f, rect.bottom - 40f)
+            // 確保不超出邊界
+            x = x.coerceIn(padding + 30f, rect.right - 30f)
+            y = y.coerceIn(padding + 30f, rect.bottom - 30f)
 
-            // 繪製熱點發光效果
-            val radialGradient = RadialGradient(x, y, 60f, 
-                intArrayOf(getHeatColor(distance), Color.TRANSPARENT),
-                null, Shader.TileMode.CLAMP)
-            val heatPaint = Paint().apply { shader = radialGradient }
-            canvas.drawCircle(x, y, 60f, heatPaint)
-
-            // 繪製中心點
-            studentPaint.color = Color.BLACK
-            canvas.drawCircle(x, y, 8f, studentPaint)
+            // 繪製一般實心色點 (半徑 20f)
+            studentPaint.color = getSolidColor(distance)
+            canvas.drawCircle(x, y, 22f, studentPaint)
+            
+            // 加入細白色外圈增加識別度
+            studentPaint.style = Paint.Style.STROKE
+            studentPaint.color = Color.WHITE
+            studentPaint.strokeWidth = 3f
+            canvas.drawCircle(x, y, 22f, studentPaint)
+            studentPaint.style = Paint.Style.FILL // 還原回填滿模式
             
             // 顯示裝置 ID
-            textPaint.color = Color.DKGRAY
-            textPaint.isFakeBoldText = false
-            canvas.drawText(address.takeLast(4), x, y + 40f, textPaint)
+            textPaint.textSize = 28f
+            canvas.drawText(address.takeLast(4), x, y + 55f, textPaint)
         }
     }
 
-    private fun getHeatColor(distance: Float): Int {
+    private fun getSolidColor(distance: Float): Int {
         return when {
-            distance < 2 -> Color.argb(180, 255, 0, 0)    // 紅 (近)
-            distance < 5 -> Color.argb(180, 255, 165, 0)  // 橘 (中)
-            else -> Color.argb(180, 0, 255, 0)            // 綠 (遠)
+            distance < 2 -> Color.parseColor("#FF5252") // 實色紅
+            distance < 5 -> Color.parseColor("#FFD740") // 實色黃
+            else -> Color.parseColor("#69F0AE")         // 實色綠
         }
     }
 }
