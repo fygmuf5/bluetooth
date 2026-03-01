@@ -3,11 +3,7 @@ package com.mcu.bluetooth
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
+import android.bluetooth.le.*
 import android.content.Context
 import android.os.Bundle
 import android.os.Handler
@@ -16,13 +12,12 @@ import android.os.ParcelUuid
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import java.util.UUID
+import java.util.*
 import kotlin.math.pow
 
 @SuppressLint("MissingPermission")
 class HeatmapActivity : AppCompatActivity() {
 
-    // 與 MainActivity 的安全通訊頻道保持一致
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
 
     private val bluetoothAdapter: BluetoothAdapter by lazy {
@@ -33,10 +28,7 @@ class HeatmapActivity : AppCompatActivity() {
     private lateinit var heatmapView: HeatmapView
     private lateinit var studentCountTv: TextView
 
-    // 儲存每個裝置的卡爾曼濾波器，讓位置移動更平滑
     private val kalmanFilters = mutableMapOf<String, KalmanFilter>()
-
-    // 儲存裝置資訊：地址 -> Pair(距離(米), 最後更新時間)
     private val deviceData = mutableMapOf<String, Pair<Float, Long>>()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -53,8 +45,9 @@ class HeatmapActivity : AppCompatActivity() {
     }
 
     private fun startScanning() {
+        // 使用更精確的過濾器
         val scanFilter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setServiceData(ParcelUuid(SERVICE_UUID), null)
             .build()
 
         val settings = ScanSettings.Builder()
@@ -66,18 +59,25 @@ class HeatmapActivity : AppCompatActivity() {
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val scanRecord = result.scanRecord ?: return
+            
+            // 關鍵修改：雙重驗證。只有包含我們自定義 Service Data 的裝置才處理
+            // 這能過濾掉其他雖然有相同 UUID 但資料格式不符的藍牙裝置
+            val payload = scanRecord.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
+            
+            // 如果資料長度太短（小於我們的 HASH_SIZE），也視為無效裝置
+            if (payload.size <= 6) return
+
             val address = result.device.address
             val rssi = result.rssi.toDouble()
 
-            // 1. 取得或建立該裝置的濾波器
-            val filter = kalmanFilters.getOrPut(address) { KalmanFilter(processNoise = 0.008, measurementNoise = 0.8) }
-
-            // 2. 進行濾波，平滑化 RSSI 訊號
+            val filter = kalmanFilters.getOrPut(address) { 
+                KalmanFilter(processNoise = 0.005, measurementNoise = 1.2) 
+            }
             val filteredRssi = filter.filter(rssi)
 
-            // 3. 使用濾波後的 RSSI 估算距離 (公尺)
-            // Measured Power (1米處的RSSI) 假設為 -59
-            val distance = 10.0.pow((-59.0 - filteredRssi) / (10.0 * 2.0)).toFloat()
+            // 距離估算
+            val distance = 10.0.pow((-59.0 - filteredRssi) / (10.0 * 2.5)).toFloat()
 
             deviceData[address] = Pair(distance, System.currentTimeMillis())
 
@@ -86,28 +86,22 @@ class HeatmapActivity : AppCompatActivity() {
     }
 
     private fun updateUI() {
-        studentCountTv.text = "本班監測中 - 目前在線學生: ${deviceData.size}"
-
-        // 將距離數據傳給自定義 View 繪圖
-        val distances = deviceData.mapValues { it.value.first }
-        heatmapView.updateDevices(distances)
+        studentCountTv.text = "監測中 - 目前在線學生: ${deviceData.size}"
+        heatmapView.updateDevices(deviceData.mapValues { it.value.first })
     }
 
     private fun startCleanupLoop() {
         handler.postDelayed(object : Runnable {
             override fun run() {
                 val currentTime = System.currentTimeMillis()
-                // 如果裝置超過 8 秒沒發送任何訊號，就視為離開
-                val removed = deviceData.entries.removeIf { currentTime - it.value.second > 8000 }
+                val removed = deviceData.entries.removeIf { currentTime - it.value.second > 10000 }
                 if (removed) {
-                    // 同步清理濾波器
-                    val activeAddresses = deviceData.keys
-                    kalmanFilters.keys.removeIf { !activeAddresses.contains(it) }
+                    kalmanFilters.keys.removeIf { !deviceData.containsKey(it) }
                     updateUI()
                 }
-                handler.postDelayed(this, 1000)
+                handler.postDelayed(this, 2000)
             }
-        }, 1000)
+        }, 2000)
     }
 
     override fun onDestroy() {

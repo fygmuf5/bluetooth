@@ -78,48 +78,47 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="發送功能"
+                android:text="點名簽到"
                 android:textColor="#333333"
-                android:textSize="18sp"
+                android:textSize="20sp"
                 android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="請依照格式輸入：學號+姓名(自動儲存)"
+                android:textColor="#666666"
+                android:textSize="14sp" />
 
             <EditText
                 android:id="@+id/message_edittext"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:hint="輸入訊息 (選填)"
+                android:layout_marginTop="12dp"
+                android:background="@android:drawable/edit_text"
+                android:hint="12345678ＯＯＯ"
                 android:inputType="textShortMessage"
-                android:maxLength="20" />
-
-            <Button
-                android:id="@+id/signal_only_button"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:backgroundTint="#009688"
-                android:padding="12dp"
-                android:text="發送點名訊號"
-                android:textSize="16sp"
-                app:cornerRadius="8dp" />
+                android:maxLength="20"
+                android:padding="12dp" />
 
             <Button
                 android:id="@+id/broadcast_button"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_height="60dp"
+                android:layout_marginTop="20dp"
                 android:backgroundTint="#2196F3"
-                android:padding="12dp"
-                android:text="發送自定義訊息"
+                android:text="發送簽到訊息"
                 android:textAllCaps="false"
                 android:textColor="#FFFFFF"
-                android:textSize="16sp"
-                app:cornerRadius="8dp" />
+                android:textSize="18sp"
+                android:textStyle="bold"
+                app:cornerRadius="12dp" />
         </LinearLayout>
     </androidx.cardview.widget.CardView>
 
@@ -129,7 +128,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:visibility="gone"
-        app:constraint_referenced_ids="teacher_controls_card,received_header,devices_listview" />
+        app:constraint_referenced_ids="teacher_controls_card,received_header,devices_listview,export_csv_button" />
 
     <androidx.cardview.widget.CardView
         android:id="@+id/teacher_controls_card"
@@ -177,6 +176,17 @@
         android:visibility="gone"
         app:layout_constraintTop_toBottomOf="@id/teacher_controls_card"
         app:layout_constraintStart_toStartOf="parent" />
+
+    <Button
+        android:id="@+id/export_csv_button"
+        style="@style/Widget.AppCompat.Button.Small"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="匯出 CSV"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="@id/received_header"
+        app:layout_constraintBottom_toBottomOf="@id/received_header" />
 
     <ListView
         android:id="@+id/devices_listview"
