@@ -9,21 +9,23 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
-import android.widget.Button
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
+import androidx.fragment.app.Fragment
 import java.util.*
 import kotlin.math.pow
 
 @SuppressLint("MissingPermission")
-class HeatmapActivity : AppCompatActivity() {
+class HeatmapFragment : Fragment() {
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
 
-    private val bluetoothAdapter: BluetoothAdapter by lazy {
-        (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+    private val bluetoothAdapter: BluetoothAdapter? by lazy {
+        (requireContext().getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     }
-    private val bleScanner: BluetoothLeScanner by lazy { bluetoothAdapter.bluetoothLeScanner }
+    private val bleScanner: BluetoothLeScanner? by lazy { bluetoothAdapter?.bluetoothLeScanner }
 
     private lateinit var heatmapView: HeatmapView
     private lateinit var studentCountTv: TextView
@@ -32,20 +34,26 @@ class HeatmapActivity : AppCompatActivity() {
     private val deviceData = mutableMapOf<String, Pair<Float, Long>>()
     private val handler = Handler(Looper.getMainLooper())
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_heatmap)
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
+        val view = inflater.inflate(R.layout.fragment_heatmap, container, false)
+        heatmapView = view.findViewById(R.id.heatmap_view)
+        studentCountTv = view.findViewById(R.id.student_count_tv)
+        return view
+    }
 
-        heatmapView = findViewById(R.id.heatmap_view)
-        studentCountTv = findViewById(R.id.student_count_tv)
-        findViewById<Button>(R.id.back_button).setOnClickListener { finish() }
-
+    override fun onResume() {
+        super.onResume()
         startScanning()
         startCleanupLoop()
     }
 
+    override fun onPause() {
+        super.onPause()
+        stopScanning()
+        handler.removeCallbacksAndMessages(null)
+    }
+
     private fun startScanning() {
-        // 使用更精確的過濾器
         val scanFilter = ScanFilter.Builder()
             .setServiceData(ParcelUuid(SERVICE_UUID), null)
             .build()
@@ -54,18 +62,17 @@ class HeatmapActivity : AppCompatActivity() {
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
-        bleScanner.startScan(listOf(scanFilter), settings, scanCallback)
+        bleScanner?.startScan(listOf(scanFilter), settings, scanCallback)
+    }
+
+    private fun stopScanning() {
+        try { bleScanner?.stopScan(scanCallback) } catch(e: Exception) {}
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val scanRecord = result.scanRecord ?: return
-            
-            // 關鍵修改：雙重驗證。只有包含我們自定義 Service Data 的裝置才處理
-            // 這能過濾掉其他雖然有相同 UUID 但資料格式不符的藍牙裝置
             val payload = scanRecord.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
-            
-            // 如果資料長度太短（小於我們的 HASH_SIZE），也視為無效裝置
             if (payload.size <= 6) return
 
             val address = result.device.address
@@ -75,17 +82,15 @@ class HeatmapActivity : AppCompatActivity() {
                 KalmanFilter(processNoise = 0.005, measurementNoise = 1.2) 
             }
             val filteredRssi = filter.filter(rssi)
-
-            // 距離估算
             val distance = 10.0.pow((-59.0 - filteredRssi) / (10.0 * 2.5)).toFloat()
 
             deviceData[address] = Pair(distance, System.currentTimeMillis())
-
-            runOnUiThread { updateUI() }
+            activity?.runOnUiThread { updateUI() }
         }
     }
 
     private fun updateUI() {
+        if (!isAdded) return
         studentCountTv.text = "監測中 - 目前在線學生: ${deviceData.size}"
         heatmapView.updateDevices(deviceData.mapValues { it.value.first })
     }
@@ -102,11 +107,5 @@ class HeatmapActivity : AppCompatActivity() {
                 handler.postDelayed(this, 2000)
             }
         }, 2000)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try { bleScanner.stopScan(scanCallback) } catch(e: Exception) {}
-        handler.removeCallbacksAndMessages(null)
     }
 }

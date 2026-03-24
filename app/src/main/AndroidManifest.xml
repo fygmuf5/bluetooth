@@ -38,12 +38,6 @@
             android:name=".MainActivity"
             android:exported="false" />
 
-        <!-- 獨立的熱點圖 Activity -->
-        <activity
-            android:name=".HeatmapActivity"
-            android:label="學生分布熱點圖"
-            android:exported="false" />
-
     </application>
 
 </manifest>
