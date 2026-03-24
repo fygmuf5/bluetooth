@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.ParcelUuid
 import android.provider.MediaStore
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -103,7 +104,18 @@ class TeacherControlsFragment : Fragment() {
             if (verifiedMsg != null) {
                 val finalMsg = "✅ [簽到成功] $verifiedMsg"
                 val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                
+                // 檢查是否為重複簽到
+                val isNewRecord = !attendanceRecords.containsKey(address) || attendanceRecords[address]?.first != verifiedMsg
+                
                 attendanceRecords[address] = Pair(verifiedMsg, timeString)
+
+                if (isNewRecord) {
+                    // 同步到伺服器
+                    NetworkManager.syncAttendance(verifiedMsg, address) { success ->
+                        if (!success) Log.e("TeacherFragment", "Failed to sync to server for $address")
+                    }
+                }
 
                 activity?.runOnUiThread {
                     val current = latestMessages[address]
