@@ -8,26 +8,80 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 object NetworkManager {
-    // **請將此處替換為您伺服器的 IP (或是伺服器網址)與路徑 (例如 http://192.168.1.100/save.php)**
-    private const val SERVER_URL = "http://YOUR_SERVER_IP/save_attendance.php"
+
+    // --- 1. 伺服器設定區 ---
+    // 請在此處替換為您的伺服器位址 (例如 "http://192.168.1.100" 或 "http://www.yourdomain.com")
+    private const val BASE_URL = "http://YOUR_SERVER_IP"
+
+    // 定義各個 PHP 腳本的路徑 (與 BASE_URL 組合使用)
+    private const val PATH_ATTENDANCE = "/save_attendance.php"
+    private const val PATH_USER_INFO  = "/save_user.php"
+    private const val PATH_VERIFY_CODE = "/request_verify_code.php"
+    private const val PATH_REGISTER    = "/register_user.php"
+
+    private const val TIMEOUT_MS = 5000
 
     /**
      * 同步點名紀錄到伺服器
      */
     fun syncAttendance(studentInfo: String, address: String, callback: (Boolean) -> Unit) {
+        val fullUrl = BASE_URL + PATH_ATTENDANCE
+        sendPostRequest(fullUrl, mapOf(
+            "student_info" to studentInfo,
+            "device_address" to address
+        ), callback)
+    }
+
+    /**
+     * 請求發送電子郵件驗證碼
+     */
+    fun requestVerifyCode(email: String, callback: (Boolean) -> Unit) {
+        val fullUrl = BASE_URL + PATH_VERIFY_CODE
+        sendPostRequest(fullUrl, mapOf("email" to email), callback)
+    }
+
+    /**
+     * 註冊新帳號
+     */
+    fun registerUser(studentId: String, email: String, password: String, verifyCode: String, callback: (Boolean) -> Unit) {
+        val fullUrl = BASE_URL + PATH_REGISTER
+        sendPostRequest(fullUrl, mapOf(
+            "student_id" to studentId,
+            "email" to email,
+            "password" to password,
+            "verify_code" to verifyCode
+        ), callback)
+    }
+
+    /**
+     * 同步用戶帳戶資訊
+     */
+    fun syncUserInfo(studentInfo: String, callback: (Boolean) -> Unit) {
+        val fullUrl = BASE_URL + PATH_USER_INFO
+        sendPostRequest(fullUrl, mapOf("student_info" to studentInfo), callback)
+    }
+
+    // --- 內部私有通用工具方法 ---
+
+    /**
+     * 通用的 POST 請求發送方法
+     */
+    private fun sendPostRequest(urlStr: String, params: Map<String, String>, callback: (Boolean) -> Unit) {
         Thread {
             var conn: HttpURLConnection? = null
             try {
-                val url = URL(SERVER_URL)
+                val url = URL(urlStr)
                 conn = url.openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.doOutput = true
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
+                conn.connectTimeout = TIMEOUT_MS
+                conn.readTimeout = TIMEOUT_MS
                 conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
 
-                val postData = "student_info=" + URLEncoder.encode(studentInfo, "UTF-8") +
-                        "&device_address=" + URLEncoder.encode(address, "UTF-8")
+                // 組合 POST 參數字串
+                val postData = params.entries.joinToString("&") {
+                    "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}"
+                }
 
                 OutputStreamWriter(conn.outputStream, StandardCharsets.UTF_8).use { writer ->
                     writer.write(postData)
@@ -35,41 +89,11 @@ object NetworkManager {
                 }
 
                 val responseCode = conn.responseCode
-                Log.d("NetworkManager", "Response Code: $responseCode")
+                Log.d("NetworkManager", "URL: $urlStr | Response: $responseCode")
                 callback(responseCode == HttpURLConnection.HTTP_OK)
 
             } catch (e: Exception) {
-                Log.e("NetworkManager", "Error syncing data", e)
-                callback(false)
-            } finally {
-                conn?.disconnect()
-            }
-        }.start()
-    }
-
-    /**
-     * 同步用戶帳戶資訊 (例如學生第一次輸入資料時)
-     */
-    fun syncUserInfo(studentInfo: String, callback: (Boolean) -> Unit) {
-        // 邏輯與 syncAttendance 類似，可根據需求調整參數
-        Thread {
-            var conn: HttpURLConnection? = null
-            try {
-                val url = URL(SERVER_URL.replace("save_attendance.php", "save_user.php"))
-                conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-
-                val postData = "student_info=" + URLEncoder.encode(studentInfo, "UTF-8")
-
-                OutputStreamWriter(conn.outputStream, StandardCharsets.UTF_8).use { writer ->
-                    writer.write(postData)
-                    writer.flush()
-                }
-
-                callback(conn.responseCode == HttpURLConnection.HTTP_OK)
-            } catch (e: Exception) {
+                Log.e("NetworkManager", "Connection error at $urlStr", e)
                 callback(false)
             } finally {
                 conn?.disconnect()

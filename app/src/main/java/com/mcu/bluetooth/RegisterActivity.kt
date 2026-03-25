@@ -68,8 +68,17 @@ class RegisterActivity : AppCompatActivity() {
                 Toast.makeText(this, "請先輸入電子郵件", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+
+            // 檢查信箱網域
+            if (!email.endsWith("@ms1.mcu.edu.tw")) {
+                Toast.makeText(this, "格式錯誤：必須使用 @ms1.mcu.edu.tw 信箱", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
             
             Toast.makeText(this, "驗證碼發送中...", Toast.LENGTH_SHORT).show()
+            
+            // 串接 NetworkManager (假設未來有這個方法)
+            // NetworkManager.requestVerifyCode(email) { success -> ... }
         }
 
         // 提交註冊
@@ -86,13 +95,19 @@ class RegisterActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            // 2. 密碼格式檢查 (至少6位，僅限英數字)
+            // 2. 信箱網域檢查
+            if (!email.endsWith("@ms1.mcu.edu.tw")) {
+                Toast.makeText(this, "註冊失敗：必須使用 @ms1.mcu.edu.tw 信箱", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+
+            // 3. 密碼格式檢查 (至少6位，僅限英數字)
             if (!isValidPassword(password)) {
                 Toast.makeText(this, "密碼格式錯誤：請輸入至少 6 位英數字，且不能包含符號或中文", Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
 
-            // 3. 兩次密碼一致性檢查
+            // 4. 兩次密碼一致性檢查
             if (password != passwordConfirm) {
                 Toast.makeText(this, "兩次輸入的密碼不一致", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener

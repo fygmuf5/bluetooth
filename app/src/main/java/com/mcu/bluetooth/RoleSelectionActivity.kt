@@ -52,13 +52,25 @@ class RoleSelectionActivity : AppCompatActivity() {
 
         // 登入按鈕
         loginButton.setOnClickListener {
-            val username = etUsername.text.toString()
+            val username = etUsername.text.toString().trim()
             val password = etPassword.text.toString()
+            
             if (username.isEmpty() || password.isEmpty()) {
                 Toast.makeText(this, "請輸入帳號與密碼", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            if (username.contains("teacher", ignoreCase = true)) startMainActivity("TEACHER") else startMainActivity("STUDENT")
+
+            // 角色判斷邏輯：
+            // 取出 @ 前面的字串，如果全為數字則為學生，否則為老師
+            val localPart = username.substringBefore("@")
+            val role = if (localPart.isNotEmpty() && localPart.all { it.isDigit() }) {
+                "STUDENT"
+            } else {
+                "TEACHER"
+            }
+
+            Toast.makeText(this, "登入身分: ${if(role == "STUDENT") "學生" else "老師"}", Toast.LENGTH_SHORT).show()
+            startMainActivity(role)
         }
 
         // 跳轉到註冊頁面
@@ -71,7 +83,7 @@ class RoleSelectionActivity : AppCompatActivity() {
             Toast.makeText(this, "請聯繫管理員", Toast.LENGTH_SHORT).show()
         }
 
-        // 快速測試按鈕
+        // 快速測試按鈕 (保留供測試使用)
         findViewById<Button>(R.id.teacher_button).setOnClickListener { startMainActivity("TEACHER") }
         findViewById<Button>(R.id.student_button).setOnClickListener { startMainActivity("STUDENT") }
     }
