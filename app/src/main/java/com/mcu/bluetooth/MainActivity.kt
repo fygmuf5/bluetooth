@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusTextView: TextView
     private lateinit var messageEditText: EditText
     private lateinit var broadcastButton: Button
-    private lateinit var backToRoleButton: Button
+    private lateinit var settingsButton: ImageButton
     private lateinit var studentCard: View
     private lateinit var teacherPagerContainer: View
     private lateinit var viewPager: ViewPager2
@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity() {
         statusTextView = findViewById(R.id.status_textview)
         messageEditText = findViewById(R.id.message_edittext)
         broadcastButton = findViewById(R.id.broadcast_button)
-        backToRoleButton = findViewById(R.id.back_to_role_selection)
+        settingsButton = findViewById(R.id.settings_button)
         studentCard = findViewById(R.id.student_card)
         teacherPagerContainer = findViewById(R.id.teacher_pager_container)
         viewPager = findViewById(R.id.teacher_view_pager)
@@ -151,11 +151,36 @@ class MainActivity : AppCompatActivity() {
             if (checkAndRequestPermissions()) broadcastSecureMessage(content) 
         }
 
-        backToRoleButton.setOnClickListener {
-            stopBleAdvertising()
-            startActivity(Intent(this, RoleSelectionActivity::class.java))
-            finish()
+        settingsButton.setOnClickListener { view ->
+            showSettingsMenu(view)
         }
+    }
+
+    private fun showSettingsMenu(view: View) {
+        val popup = PopupMenu(this, view)
+        // 使用程式碼手動建立選單項目，登出放在最下面
+        popup.menu.add(0, 1, 0, "查詢紀錄")
+        popup.menu.add(0, 2, 1, "登出")
+
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> {
+                    Toast.makeText(this, "查詢功能開發中...", Toast.LENGTH_SHORT).show()
+                    true
+                }
+                2 -> {
+                    // 執行登出邏輯
+                    stopBleAdvertising()
+                    val intent = Intent(this, RoleSelectionActivity::class.java)
+                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    startActivity(intent)
+                    finish()
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
     }
 
     private fun checkAndRequestPermissions(): Boolean {
