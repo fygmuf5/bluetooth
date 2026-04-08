@@ -18,10 +18,11 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import java.nio.charset.Charset
-import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -29,9 +30,6 @@ import java.util.*
 class TeacherControlsFragment : Fragment() {
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    private val SECRET_KEY = "MCU_SECURE_KEY_2024"
-    private val TIME_WINDOW_MS = 30000L
-    private val HASH_SIZE = 6
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         (requireContext().getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
@@ -46,6 +44,18 @@ class TeacherControlsFragment : Fragment() {
     private val latestMessages = mutableMapOf<String, String>()
     private val historyMessages = Collections.synchronizedList(mutableListOf<String>())
     private val attendanceRecords = mutableMapOf<String, Pair<String, String>>()
+
+    private val requestPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val allGranted = perms.values.all { it }
+        if (allGranted) {
+            startBleScan()
+        } else {
+            Toast.makeText(requireContext(), "未取得藍牙掃描權限，無法接收點名", Toast.LENGTH_LONG).show()
+            scanToggleButton.isChecked = false
+        }
+    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_teacher_controls, container, false)
@@ -64,7 +74,7 @@ class TeacherControlsFragment : Fragment() {
     private fun setupListeners() {
         scanToggleButton.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
-                if (hasRequiredPermissions()) startBleScan() else scanToggleButton.isChecked = false
+                checkAndRequestPermissions()
             } else {
                 stopBleScan()
             }
@@ -72,12 +82,31 @@ class TeacherControlsFragment : Fragment() {
         exportCsvButton.setOnClickListener { exportAttendanceToCsv() }
     }
 
-    private fun hasRequiredPermissions(): Boolean {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    private fun checkAndRequestPermissions() {
+        val required = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        
-        return permissions.all { ContextCompat.checkSelfPermission(requireContext(), it) == PackageManager.PERMISSION_GRANTED }
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+        val missing = required.filter {
+            ContextCompat.checkSelfPermission(requireContext(), it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missing.isEmpty()) {
+            startBleScan()
+        } else {
+            AlertDialog.Builder(requireContext())
+                .setTitle("需要權限")
+                .setMessage("接收點名訊息需要藍牙掃描與定位權限。")
+                .setPositiveButton("確定") { _, _ ->
+                    requestPermissionsLauncher.launch(required)
+                }
+                .setNegativeButton("取消") { _, _ ->
+                    scanToggleButton.isChecked = false
+                }
+                .show()
+        }
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -86,49 +115,34 @@ class TeacherControlsFragment : Fragment() {
             val address = result.device.address
             val payload = scanRecord.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
             
-            var verifiedMsg: String? = null
-            if (payload.size > HASH_SIZE) {
-                val receivedHash = payload.take(HASH_SIZE).toByteArray()
-                val encryptedContent = payload.drop(HASH_SIZE).toByteArray()
+            val verifiedMsg = String(payload, Charset.forName("UTF-8"))
 
-                for (offset in listOf(0L, -TIME_WINDOW_MS, TIME_WINDOW_MS)) {
-                    val decryptedBytes = xorTransform(encryptedContent, offset)
-                    val testMsg = String(decryptedBytes, Charset.forName("UTF-8"))
-                    if (generateRollingHash(testMsg, offset).contentEquals(receivedHash)) {
-                        verifiedMsg = testMsg
-                        break
-                    }
+            val finalMsg = "✅ [簽到成功] $verifiedMsg"
+            val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            
+            // 檢查是否為重複簽到
+            val isNewRecord = !attendanceRecords.containsKey(address) || attendanceRecords[address]?.first != verifiedMsg
+            
+            attendanceRecords[address] = Pair(verifiedMsg, timeString)
+
+            if (isNewRecord) {
+                // 同步到伺服器
+                NetworkManager.syncAttendance(verifiedMsg, address) { success ->
+                    if (!success) Log.e("TeacherFragment", "Failed to sync to server for $address")
                 }
             }
 
-            if (verifiedMsg != null) {
-                val finalMsg = "✅ [簽到成功] $verifiedMsg"
-                val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                
-                // 檢查是否為重複簽到
-                val isNewRecord = !attendanceRecords.containsKey(address) || attendanceRecords[address]?.first != verifiedMsg
-                
-                attendanceRecords[address] = Pair(verifiedMsg, timeString)
-
-                if (isNewRecord) {
-                    // 同步到伺服器
-                    NetworkManager.syncAttendance(verifiedMsg, address) { success ->
-                        if (!success) Log.e("TeacherFragment", "Failed to sync to server for $address")
-                    }
-                }
-
-                activity?.runOnUiThread {
-                    val current = latestMessages[address]
-                    if (current != finalMsg) {
-                        if (current != null) {
-                            val historyEntry = "$current\n[$address]"
-                            if (historyMessages.isEmpty() || historyMessages[0] != historyEntry) {
-                                historyMessages.add(0, historyEntry)
-                            }
+            activity?.runOnUiThread {
+                val current = latestMessages[address]
+                if (current != finalMsg) {
+                    if (current != null) {
+                        val historyEntry = "$current\n[$address]"
+                        if (historyMessages.isEmpty() || historyMessages[0] != historyEntry) {
+                            historyMessages.add(0, historyEntry)
                         }
-                        latestMessages[address] = finalMsg
-                        updateListView()
                     }
+                    latestMessages[address] = finalMsg
+                    updateListView()
                 }
             }
         }
@@ -162,18 +176,6 @@ class TeacherControlsFragment : Fragment() {
         receivedBroadcastsAdapter.clear()
         receivedBroadcastsAdapter.addAll(displayList)
         receivedBroadcastsAdapter.notifyDataSetChanged()
-    }
-
-    private fun xorTransform(data: ByteArray, timeOffset: Long): ByteArray {
-        val timeBucket = (System.currentTimeMillis() + timeOffset) / TIME_WINDOW_MS
-        val key = MessageDigest.getInstance("SHA-1").digest((SECRET_KEY + timeBucket).toByteArray())
-        return ByteArray(data.size) { i -> (data[i].toInt() xor key[i % key.size].toInt()).toByte() }
-    }
-
-    private fun generateRollingHash(message: String, timeOffset: Long): ByteArray {
-        val timeBucket = (System.currentTimeMillis() + timeOffset) / TIME_WINDOW_MS
-        val input = message + SECRET_KEY + timeBucket
-        return MessageDigest.getInstance("SHA-1").digest(input.toByteArray()).take(HASH_SIZE).toByteArray()
     }
 
     private fun exportAttendanceToCsv() {

@@ -9,8 +9,7 @@ import com.google.android.material.textfield.TextInputLayout
 
 class RegisterActivity : AppCompatActivity() {
 
-    private lateinit var etStudentId: EditText
-    private lateinit var etEmail: EditText
+    private lateinit var etEmailInput: EditText
     private lateinit var etPassword: EditText
     private lateinit var etPasswordConfirm: EditText
     private lateinit var etVerifyCode: EditText
@@ -33,8 +32,7 @@ class RegisterActivity : AppCompatActivity() {
     }
 
     private fun initializeUI() {
-        etStudentId = findViewById(R.id.et_reg_student_id)
-        etEmail = findViewById(R.id.et_reg_email)
+        etEmailInput = findViewById(R.id.et_reg_email)
         etPassword = findViewById(R.id.et_reg_password)
         etPasswordConfirm = findViewById(R.id.et_reg_password_confirm)
         etVerifyCode = findViewById(R.id.et_reg_verify_code)
@@ -47,10 +45,8 @@ class RegisterActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        // 返回按鈕
         btnBack.setOnClickListener { finish() }
 
-        // 密碼顯示切換
         tilPassword.setEndIconOnClickListener {
             isPasswordVisible = !isPasswordVisible
             togglePasswordVisibility(etPassword, tilPassword, isPasswordVisible)
@@ -61,72 +57,73 @@ class RegisterActivity : AppCompatActivity() {
             togglePasswordVisibility(etPasswordConfirm, tilPasswordConfirm, isConfirmPasswordVisible)
         }
 
-        // 獲取驗證碼
         btnGetVerifyCode.setOnClickListener {
-            val email = etEmail.text.toString().trim()
-            if (email.isEmpty()) {
-                Toast.makeText(this, "請先輸入電子郵件", Toast.LENGTH_SHORT).show()
+            val input = etEmailInput.text.toString().trim()
+            if (input.isEmpty()) {
+                Toast.makeText(this, "請輸入學號或帳號", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // 檢查信箱網域
-            if (!email.endsWith("@ms1.mcu.edu.tw")) {
-                Toast.makeText(this, "格式錯誤：必須使用 @ms1.mcu.edu.tw 信箱", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
+            val fullEmail = formatEmail(input)
+            Toast.makeText(this, "驗證碼發送至: $fullEmail", Toast.LENGTH_SHORT).show()
+            
+            NetworkManager.requestVerifyCode(fullEmail) { success ->
+                runOnUiThread {
+                    if (success) Toast.makeText(this, "驗證碼已寄出", Toast.LENGTH_SHORT).show()
+                    else Toast.makeText(this, "發送失敗", Toast.LENGTH_SHORT).show()
+                }
             }
-            
-            Toast.makeText(this, "驗證碼發送中...", Toast.LENGTH_SHORT).show()
-            
-            // 串接 NetworkManager (假設未來有這個方法)
-            // NetworkManager.requestVerifyCode(email) { success -> ... }
         }
 
-        // 提交註冊
         btnRegisterSubmit.setOnClickListener {
-            val studentId = etStudentId.text.toString().trim()
-            val email = etEmail.text.toString().trim()
+            val input = etEmailInput.text.toString().trim()
             val password = etPassword.text.toString()
             val passwordConfirm = etPasswordConfirm.text.toString()
             val verifyCode = etVerifyCode.text.toString().trim()
 
-            // 1. 基本欄位檢查
-            if (studentId.isEmpty() || email.isEmpty() || password.isEmpty() || verifyCode.isEmpty()) {
+            if (input.isEmpty() || password.isEmpty() || verifyCode.isEmpty()) {
                 Toast.makeText(this, "請填寫所有欄位", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // 2. 信箱網域檢查
-            if (!email.endsWith("@ms1.mcu.edu.tw")) {
-                Toast.makeText(this, "註冊失敗：必須使用 @ms1.mcu.edu.tw 信箱", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-
-            // 3. 密碼格式檢查 (至少6位，僅限英數字)
             if (!isValidPassword(password)) {
-                Toast.makeText(this, "密碼格式錯誤：請輸入至少 6 位英數字，且不能包含符號或中文", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "密碼格式錯誤 (至少6位英數字)", Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
 
-            // 4. 兩次密碼一致性檢查
             if (password != passwordConfirm) {
-                Toast.makeText(this, "兩次輸入的密碼不一致", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "密碼不一致", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // 這裡未來執行 NetworkManager.register(...)
-            Toast.makeText(this, "註冊請求已送出", Toast.LENGTH_SHORT).show()
+            val fullEmail = formatEmail(input)
+            NetworkManager.registerUser(fullEmail, password, verifyCode) { success ->
+                runOnUiThread {
+                    if (success) {
+                        Toast.makeText(this, "註冊成功！", Toast.LENGTH_SHORT).show()
+                        finish()
+                    } else {
+                        Toast.makeText(this, "註冊失敗", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
     }
 
     /**
-     * 驗證密碼是否符合：長度 >= 6 且 僅包含大小寫英文字母或數字 (不含符號與中文)
+     * 判定邏輯：8位純數字 -> @me.mcu.edu.tw (學生)
+     * 其他 -> @gmail.com (老師)
      */
+    private fun formatEmail(input: String): String {
+        return if (input.length == 8 && input.all { it.isDigit() }) {
+            "$input@me.mcu.edu.tw"
+        } else {
+            "$input@gmail.com"
+        }
+    }
+
     private fun isValidPassword(password: String): Boolean {
-        // 檢查長度
         if (password.length < 6) return false
-        
-        // 使用正則表達式檢查是否「全為大小寫英文字母或數字」
-        // ^[a-zA-Z0-9]*$ 代表從頭到尾只能是 a-z, A-Z 或 0-9
         return password.matches(Regex("^[a-zA-Z0-9]*$"))
     }
 

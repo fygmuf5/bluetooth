@@ -11,8 +11,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
-import android.text.Editable
-import android.text.TextWatcher
 import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,24 +21,20 @@ import androidx.fragment.app.Fragment
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
 import java.nio.charset.Charset
-import java.security.MessageDigest
 import java.util.*
 
 @SuppressLint("MissingPermission")
 class MainActivity : AppCompatActivity() {
 
-    // --- 安全與通訊設定 ---
+    // --- 通訊設定 ---
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    private val SECRET_KEY = "MCU_SECURE_KEY_2024"
-    private val TIME_WINDOW_MS = 30000L
-    private val HASH_SIZE = 6
 
     private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
     private val bluetoothAdapter: BluetoothAdapter by lazy { bluetoothManager.adapter }
     private val bleAdvertiser: BluetoothLeAdvertiser by lazy { bluetoothAdapter.bluetoothLeAdvertiser }
 
     private lateinit var statusTextView: TextView
-    private lateinit var messageEditText: EditText
+    private lateinit var studentIdTextView: TextView
     private lateinit var broadcastButton: Button
     private lateinit var settingsButton: ImageButton
     private lateinit var studentCard: View
@@ -50,7 +44,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dot2: ImageView
 
     private var currentRole: String? = null
-    private val sharedPrefs by lazy { getSharedPreferences("MCU_BT_PREFS", Context.MODE_PRIVATE) }
+    private var userEmail: String? = null
+    private var studentId: String = ""
 
     private val requestBluetoothPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
         val allGranted = perms.values.all { it }
@@ -66,16 +61,19 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         currentRole = intent.getStringExtra("EXTRA_ROLE")
+        userEmail = intent.getStringExtra("EXTRA_EMAIL")
+        
+        // 提取學號 (Email @ 前面的部分)
+        studentId = userEmail?.substringBefore("@") ?: "Unknown"
 
         initializeUI()
         setupRoleUI()
         setupListeners()
-        loadSavedStudentInfo()
     }
 
     private fun initializeUI() {
         statusTextView = findViewById(R.id.status_textview)
-        messageEditText = findViewById(R.id.message_edittext)
+        studentIdTextView = findViewById(R.id.student_id_textview)
         broadcastButton = findViewById(R.id.broadcast_button)
         settingsButton = findViewById(R.id.settings_button)
         studentCard = findViewById(R.id.student_card)
@@ -85,25 +83,19 @@ class MainActivity : AppCompatActivity() {
         dot2 = findViewById(R.id.dot2)
     }
 
-    private fun loadSavedStudentInfo() {
-        if (currentRole == "STUDENT") {
-            val savedInfo = sharedPrefs.getString("STUDENT_INFO", "")
-            messageEditText.setText(savedInfo)
-        }
-    }
-
     private fun setupRoleUI() {
         when (currentRole) {
             "TEACHER" -> {
                 teacherPagerContainer.visibility = View.VISIBLE
                 studentCard.visibility = View.GONE
-                statusTextView.text = "身份: 老師 (左右滑動切換熱點圖)"
+                statusTextView.text = "身份: 老師 (左右滑動切換)"
                 setupTeacherViewPager()
             }
             "STUDENT" -> {
                 teacherPagerContainer.visibility = View.GONE
                 studentCard.visibility = View.VISIBLE
                 statusTextView.text = "身份: 學生 (發送模式)"
+                studentIdTextView.text = "學號 : $studentId"
             }
             else -> {
                 startActivity(Intent(this, RoleSelectionActivity::class.java))
@@ -134,21 +126,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        messageEditText.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                sharedPrefs.edit().putString("STUDENT_INFO", s.toString()).apply()
-            }
-        })
-
         broadcastButton.setOnClickListener { 
-            val content = messageEditText.text.toString().trim()
-            if (content.isEmpty()) {
-                Toast.makeText(this, "請先輸入學號姓名", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
+            // 學生點名時直接發送提取出的學號
+            if (studentId.isNotEmpty() && studentId != "Unknown") {
+                if (checkAndRequestPermissions()) broadcastMessage(studentId)
+            } else {
+                Toast.makeText(this, "無法獲取學號資訊", Toast.LENGTH_SHORT).show()
             }
-            if (checkAndRequestPermissions()) broadcastSecureMessage(content) 
         }
 
         settingsButton.setOnClickListener { view ->
@@ -158,7 +142,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsMenu(view: View) {
         val popup = PopupMenu(this, view)
-        // 使用程式碼手動建立選單項目，登出放在最下面
         popup.menu.add(0, 1, 0, "查詢紀錄")
         popup.menu.add(0, 2, 1, "登出")
 
@@ -169,7 +152,6 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 2 -> {
-                    // 執行登出邏輯
                     stopBleAdvertising()
                     val intent = Intent(this, RoleSelectionActivity::class.java)
                     intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -201,25 +183,11 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "未取得必要權限，功能無法運作", Toast.LENGTH_LONG).show()
     }
 
-    private fun xorTransform(data: ByteArray, timeOffset: Long): ByteArray {
-        val timeBucket = (System.currentTimeMillis() + timeOffset) / TIME_WINDOW_MS
-        val key = MessageDigest.getInstance("SHA-1").digest((SECRET_KEY + timeBucket).toByteArray())
-        return ByteArray(data.size) { i -> (data[i].toInt() xor key[i % key.size].toInt()).toByte() }
-    }
-
-    private fun generateRollingHash(message: String, timeOffset: Long): ByteArray {
-        val timeBucket = (System.currentTimeMillis() + timeOffset) / TIME_WINDOW_MS
-        val input = message + SECRET_KEY + timeBucket
-        return MessageDigest.getInstance("SHA-1").digest(input.toByteArray()).take(HASH_SIZE).toByteArray()
-    }
-
-    private fun broadcastSecureMessage(message: String) {
+    private fun broadcastMessage(message: String) {
         if (!hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) return
-        val hashPart = generateRollingHash(message, 0L)
-        val encryptedPart = xorTransform(message.toByteArray(Charset.forName("UTF-8")), 0L)
-        val payload = hashPart + encryptedPart
+        val payload = message.toByteArray(Charset.forName("UTF-8"))
 
-        if (payload.size > 24) {
+        if (payload.size > 26) {
             Toast.makeText(this, "訊息過長", Toast.LENGTH_SHORT).show()
             return
         }
@@ -230,7 +198,7 @@ class MainActivity : AppCompatActivity() {
 
         bleAdvertiser.startAdvertising(settings, data, object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-                runOnUiThread { statusTextView.text = "Status: 正在發送簽到訊息..." }
+                runOnUiThread { statusTextView.text = "Status: 正在發送簽到訊息($message)" }
             }
         })
     }

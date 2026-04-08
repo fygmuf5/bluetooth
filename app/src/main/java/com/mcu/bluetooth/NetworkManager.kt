@@ -1,72 +1,84 @@
 package com.mcu.bluetooth
 
 import android.util.Log
+import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 object NetworkManager {
 
     // --- 1. 伺服器設定區 ---
-    // 請在此處替換為您的伺服器位址 (例如 "http://192.168.1.100" 或 "http://www.yourdomain.com")
-    private const val BASE_URL = "http://YOUR_SERVER_IP"
+    // 將此處改為 ngrok 提供的手機公網網址
+    private const val BASE_URL = "https://你的ngrok代碼.ngrok-free.app"
 
-    // 定義各個 PHP 腳本的路徑 (與 BASE_URL 組合使用)
-    private const val PATH_ATTENDANCE = "/save_attendance.php"
-    private const val PATH_USER_INFO  = "/save_user.php"
-    private const val PATH_VERIFY_CODE = "/request_verify_code.php"
-    private const val PATH_REGISTER    = "/register_user.php"
+    // Node.js RESTful API 路徑
+    private const val PATH_ATTENDANCE   = "/api/attendance"
+    private const val PATH_USER_INFO    = "/api/user/info"
+    private const val PATH_VERIFY_CODE  = "/api/auth/verify-code"
+    private const val PATH_REGISTER     = "/api/auth/register"
+    private const val PATH_LOGIN        = "/api/auth/login"
 
     private const val TIMEOUT_MS = 5000
 
     /**
-     * 同步點名紀錄到伺服器
+     * 登入驗證
+     */
+    fun login(email: String, password: String, callback: (Boolean) -> Unit) {
+        val json = JSONObject().apply {
+            put("email", email)
+            put("password", password)
+        }
+        sendJsonPost(BASE_URL + PATH_LOGIN, json, callback)
+    }
+
+    /**
+     * 同步點名紀錄
      */
     fun syncAttendance(studentInfo: String, address: String, callback: (Boolean) -> Unit) {
-        val fullUrl = BASE_URL + PATH_ATTENDANCE
-        sendPostRequest(fullUrl, mapOf(
-            "student_info" to studentInfo,
-            "device_address" to address
-        ), callback)
+        val json = JSONObject().apply {
+            put("student_info", studentInfo)
+            put("device_address", address)
+        }
+        sendJsonPost(BASE_URL + PATH_ATTENDANCE, json, callback)
     }
 
     /**
-     * 請求發送電子郵件驗證碼
+     * 請求驗證碼
      */
     fun requestVerifyCode(email: String, callback: (Boolean) -> Unit) {
-        val fullUrl = BASE_URL + PATH_VERIFY_CODE
-        sendPostRequest(fullUrl, mapOf("email" to email), callback)
+        val json = JSONObject().apply {
+            put("email", email)
+        }
+        sendJsonPost(BASE_URL + PATH_VERIFY_CODE, json, callback)
     }
 
     /**
-     * 註冊新帳號
+     * 註冊帳號 (移除 studentId，由伺服器端從 email 提取)
      */
-    fun registerUser(studentId: String, email: String, password: String, verifyCode: String, callback: (Boolean) -> Unit) {
-        val fullUrl = BASE_URL + PATH_REGISTER
-        sendPostRequest(fullUrl, mapOf(
-            "student_id" to studentId,
-            "email" to email,
-            "password" to password,
-            "verify_code" to verifyCode
-        ), callback)
+    fun registerUser(email: String, password: String, verifyCode: String, callback: (Boolean) -> Unit) {
+        val json = JSONObject().apply {
+            put("email", email)
+            put("password", password)
+            put("verify_code", verifyCode)
+        }
+        sendJsonPost(BASE_URL + PATH_REGISTER, json, callback)
     }
 
     /**
-     * 同步用戶帳戶資訊
+     * 同步用戶資訊
      */
     fun syncUserInfo(studentInfo: String, callback: (Boolean) -> Unit) {
-        val fullUrl = BASE_URL + PATH_USER_INFO
-        sendPostRequest(fullUrl, mapOf("student_info" to studentInfo), callback)
+        val json = JSONObject().apply {
+            put("student_info", studentInfo)
+        }
+        sendJsonPost(BASE_URL + PATH_USER_INFO, json, callback)
     }
 
-    // --- 內部私有通用工具方法 ---
+    // --- 內部私有通用工具方法 (JSON 版) ---
 
-    /**
-     * 通用的 POST 請求發送方法
-     */
-    private fun sendPostRequest(urlStr: String, params: Map<String, String>, callback: (Boolean) -> Unit) {
+    private fun sendJsonPost(urlStr: String, jsonBody: JSONObject, callback: (Boolean) -> Unit) {
         Thread {
             var conn: HttpURLConnection? = null
             try {
@@ -76,24 +88,22 @@ object NetworkManager {
                 conn.doOutput = true
                 conn.connectTimeout = TIMEOUT_MS
                 conn.readTimeout = TIMEOUT_MS
-                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-
-                // 組合 POST 參數字串
-                val postData = params.entries.joinToString("&") {
-                    "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}"
-                }
+                
+                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                conn.setRequestProperty("Accept", "application/json")
 
                 OutputStreamWriter(conn.outputStream, StandardCharsets.UTF_8).use { writer ->
-                    writer.write(postData)
+                    writer.write(jsonBody.toString())
                     writer.flush()
                 }
 
                 val responseCode = conn.responseCode
-                Log.d("NetworkManager", "URL: $urlStr | Response: $responseCode")
-                callback(responseCode == HttpURLConnection.HTTP_OK)
+                Log.d("NetworkManager", "Node.js URL: $urlStr | Status: $responseCode")
+                
+                callback(responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_CREATED)
 
             } catch (e: Exception) {
-                Log.e("NetworkManager", "Connection error at $urlStr", e)
+                Log.e("NetworkManager", "Node.js Connection Error", e)
                 callback(false)
             } finally {
                 conn?.disconnect()

@@ -76,29 +76,20 @@
                 android:textStyle="bold" />
 
             <TextView
+                android:id="@+id/student_id_textview"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="請依照格式輸入：學號+姓名(自動儲存)"
-                android:textColor="#666666"
-                android:textSize="14sp" />
-
-            <EditText
-                android:id="@+id/message_edittext"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:background="@android:drawable/edit_text"
-                android:hint="12345678ＯＯＯ"
-                android:inputType="textShortMessage"
-                android:maxLength="20"
-                android:padding="12dp" />
+                android:text="學號 : "
+                android:textColor="#333333"
+                android:textSize="18sp"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/broadcast_button"
                 android:layout_width="match_parent"
                 android:layout_height="60dp"
-                android:layout_marginTop="20dp"
+                android:layout_marginTop="24dp"
                 android:backgroundTint="#2196F3"
                 android:text="發送簽到訊息"
                 android:textAllCaps="false"

@@ -47,35 +47,20 @@
                 android:orientation="vertical"
                 android:padding="20dp">
 
-                <!-- 學號 -->
+                <!-- 帳號 (學號或教職員帳號) -->
                 <com.google.android.material.textfield.TextInputLayout
                     style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="學號"
-                    app:startIconDrawable="@android:drawable/ic_menu_edit">
-
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/et_reg_student_id"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:inputType="number" />
-                </com.google.android.material.textfield.TextInputLayout>
-
-                <!-- 帳號 (Email) -->
-                <com.google.android.material.textfield.TextInputLayout
-                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:hint="帳號 (電子郵件)"
+                    android:hint="帳號 (學號或教職員帳號)"
+                    app:helperText="學生請輸8位學號，老師請輸帳號"
                     app:startIconDrawable="@android:drawable/ic_dialog_email">
 
                     <com.google.android.material.textfield.TextInputEditText
                         android:id="@+id/et_reg_email"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:inputType="textEmailAddress" />
+                        android:inputType="text" />
                 </com.google.android.material.textfield.TextInputLayout>
 
                 <!-- 密碼 -->
