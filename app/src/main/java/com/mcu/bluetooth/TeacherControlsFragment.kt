@@ -44,29 +44,30 @@ class TeacherControlsFragment : Fragment() {
     private val latestMessages = mutableMapOf<String, String>()
     private val historyMessages = Collections.synchronizedList(mutableListOf<String>())
     private val attendanceRecords = mutableMapOf<String, Pair<String, String>>()
+    
+    // 安全驗證相關
+    private var currentXorKey: String? = null
+    private var otpVerifyList: Map<String, String>? = null
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
         val allGranted = perms.values.all { it }
         if (allGranted) {
-            startBleScan()
+            startSecureSession()
         } else {
-            Toast.makeText(requireContext(), "未取得藍牙掃描權限，無法接收點名", Toast.LENGTH_LONG).show()
+            Toast.makeText(requireContext(), "未取得藍牙掃描權限", Toast.LENGTH_LONG).show()
             scanToggleButton.isChecked = false
         }
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_teacher_controls, container, false)
-        
         scanToggleButton = view.findViewById(R.id.scan_toggle_button)
         exportCsvButton = view.findViewById(R.id.export_csv_button)
         devicesListView = view.findViewById(R.id.devices_listview)
-
         receivedBroadcastsAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_list_item_1)
         devicesListView.adapter = receivedBroadcastsAdapter
-
         setupListeners()
         return view
     }
@@ -85,65 +86,91 @@ class TeacherControlsFragment : Fragment() {
     private fun checkAndRequestPermissions() {
         val required = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+        } else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
 
         val missing = required.filter {
             ContextCompat.checkSelfPermission(requireContext(), it) != PackageManager.PERMISSION_GRANTED
         }
 
         if (missing.isEmpty()) {
-            startBleScan()
+            startSecureSession()
         } else {
             AlertDialog.Builder(requireContext())
                 .setTitle("需要權限")
                 .setMessage("接收點名訊息需要藍牙掃描與定位權限。")
-                .setPositiveButton("確定") { _, _ ->
-                    requestPermissionsLauncher.launch(required)
-                }
-                .setNegativeButton("取消") { _, _ ->
+                .setPositiveButton("確定") { _, _ -> requestPermissionsLauncher.launch(required) }
+                .setNegativeButton("取消") { _, _ -> scanToggleButton.isChecked = false }
+                .show()
+        }
+    }
+
+    /**
+     * 啟動安全點名 Session：先拿金鑰，再拿 OTP 名單，最後啟動掃描
+     */
+    private fun startSecureSession() {
+        val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
+        
+        // 1. 向伺服器拿 XOR 金鑰
+        NetworkManager.startAttendanceSession(email) { xorKey ->
+            activity?.runOnUiThread {
+                if (xorKey != null) {
+                    currentXorKey = xorKey
+                    // 2. 拿 OTP 驗證清單
+                    updateOtpVerifyList(email)
+                    startBleScan()
+                } else {
+                    Toast.makeText(requireContext(), "無法啟動點名 Session", Toast.LENGTH_SHORT).show()
                     scanToggleButton.isChecked = false
                 }
-                .show()
+            }
+        }
+    }
+
+    private fun updateOtpVerifyList(email: String) {
+        NetworkManager.getVerifyList(email) { list ->
+            otpVerifyList = list
         }
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val scanRecord = result.scanRecord ?: return
-            val address = result.device.address
-            val payload = scanRecord.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
-            
-            val verifiedMsg = String(payload, Charset.forName("UTF-8"))
+            val payload = result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
+            val xorKey = currentXorKey ?: return
 
-            val finalMsg = "✅ [簽到成功] $verifiedMsg"
-            val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-            
-            // 檢查是否為重複簽到
-            val isNewRecord = !attendanceRecords.containsKey(address) || attendanceRecords[address]?.first != verifiedMsg
-            
-            attendanceRecords[address] = Pair(verifiedMsg, timeString)
-
-            if (isNewRecord) {
-                // 同步到伺服器
-                NetworkManager.syncAttendance(verifiedMsg, address) { success ->
-                    if (!success) Log.e("TeacherFragment", "Failed to sync to server for $address")
-                }
+            // 1. XOR 解密
+            val keyBytes = xorKey.toByteArray(Charset.forName("UTF-8"))
+            val decryptedBytes = ByteArray(payload.size)
+            for (i in payload.indices) {
+                decryptedBytes[i] = (payload[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
             }
+            val decryptedStr = String(decryptedBytes, Charset.forName("UTF-8"))
 
-            activity?.runOnUiThread {
-                val current = latestMessages[address]
-                if (current != finalMsg) {
-                    if (current != null) {
-                        val historyEntry = "$current\n[$address]"
-                        if (historyMessages.isEmpty() || historyMessages[0] != historyEntry) {
-                            historyMessages.add(0, historyEntry)
-                        }
-                    }
-                    latestMessages[address] = finalMsg
-                    updateListView()
-                }
+            // 2. 解析封包 (學號|OTP)
+            if (!decryptedStr.contains("|")) return
+            val parts = decryptedStr.split("|")
+            if (parts.size < 2) return
+            val studentId = parts[0]
+            val receivedOtp = parts[1]
+
+            // 3. 驗證 OTP
+            val expectedOtp = otpVerifyList?.get(studentId)
+            if (receivedOtp == expectedOtp) {
+                processValidCheckIn(studentId, result.device.address)
+            }
+        }
+    }
+
+    private fun processValidCheckIn(id: String, address: String) {
+        val finalMsg = "✅ [簽到成功] $id"
+        val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        
+        activity?.runOnUiThread {
+            if (latestMessages[address] != finalMsg) {
+                latestMessages[address] = finalMsg
+                attendanceRecords[address] = Pair(id, timeString)
+                updateListView()
+                // 同步結果回伺服器
+                NetworkManager.syncAttendance(id, address) { _ -> }
             }
         }
     }
@@ -163,15 +190,8 @@ class TeacherControlsFragment : Fragment() {
 
     private fun updateListView() {
         val displayList = mutableListOf<String>()
-        if (latestMessages.isNotEmpty()) {
-            displayList.add("=== 已簽到名單 (${latestMessages.size}) ===")
-            latestMessages.keys.sorted().forEach { addr ->
-                displayList.add("${latestMessages[addr]}\n[$addr]")
-            }
-        }
-        if (historyMessages.isNotEmpty()) {
-            displayList.add("\n=== 歷史紀錄 ===")
-            displayList.addAll(historyMessages)
+        latestMessages.keys.sorted().forEach { addr ->
+            displayList.add("${latestMessages[addr]}\n[$addr]")
         }
         receivedBroadcastsAdapter.clear()
         receivedBroadcastsAdapter.addAll(displayList)
@@ -184,9 +204,9 @@ class TeacherControlsFragment : Fragment() {
             return
         }
         val fileName = "點名紀錄_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.csv"
-        val csvContent = StringBuilder().append("學號/姓名,設備地址,最後更新時間\n")
+        val csvContent = StringBuilder().append("學號,設備地址,簽到時間\n")
         attendanceRecords.forEach { (address, pair) ->
-            csvContent.append("\"${pair.first}\",\"$address\",\"${pair.second}\"\n")
+            csvContent.append("${pair.first},$address,${pair.second}\n")
         }
         try {
             val contentValues = ContentValues().apply {

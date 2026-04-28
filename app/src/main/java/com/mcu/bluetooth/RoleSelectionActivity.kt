@@ -1,7 +1,9 @@
 package com.mcu.bluetooth
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import android.text.method.HideReturnsTransformationMethod
 import android.text.method.PasswordTransformationMethod
 import android.widget.Button
@@ -57,8 +59,10 @@ class RoleSelectionActivity : AppCompatActivity() {
             }
 
             val fullEmail = formatEmail(input)
+            val deviceId = getUniqueDeviceId()
             
-            NetworkManager.login(fullEmail, password) { success ->
+            // 修正：傳入 deviceId 參數以符合 NetworkManager.login 的定義
+            NetworkManager.login(fullEmail, password, deviceId) { success ->
                 runOnUiThread {
                     if (success) {
                         val localPart = fullEmail.substringBefore("@")
@@ -71,7 +75,7 @@ class RoleSelectionActivity : AppCompatActivity() {
                         Toast.makeText(this, "登入成功！", Toast.LENGTH_SHORT).show()
                         startMainActivity(role, fullEmail)
                     } else {
-                        Toast.makeText(this, "登入失敗：帳號或密碼錯誤", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "登入失敗：帳號、密碼錯誤或設備未綁定", Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -92,6 +96,14 @@ class RoleSelectionActivity : AppCompatActivity() {
         findViewById<Button>(R.id.student_button).setOnClickListener { 
             startMainActivity("STUDENT", "11012345@me.mcu.edu.tw") 
         }
+    }
+
+    /**
+     * 獲取設備唯一識別碼 (Android ID) 以驗證設備綁定
+     */
+    @SuppressLint("HardwareIds")
+    private fun getUniqueDeviceId(): String {
+        return Settings.Secure.getString(this.contentResolver, Settings.Secure.ANDROID_ID) ?: "Unknown"
     }
 
     private fun formatEmail(input: String): String {

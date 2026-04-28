@@ -1,6 +1,8 @@
 package com.mcu.bluetooth
 
+import android.annotation.SuppressLint
 import android.os.Bundle
+import android.provider.Settings
 import android.text.method.HideReturnsTransformationMethod
 import android.text.method.PasswordTransformationMethod
 import android.widget.*
@@ -63,10 +65,7 @@ class RegisterActivity : AppCompatActivity() {
                 Toast.makeText(this, "請輸入學號或帳號", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-
             val fullEmail = formatEmail(input)
-            Toast.makeText(this, "驗證碼發送至: $fullEmail", Toast.LENGTH_SHORT).show()
-            
             NetworkManager.requestVerifyCode(fullEmail) { success ->
                 runOnUiThread {
                     if (success) Toast.makeText(this, "驗證碼已寄出", Toast.LENGTH_SHORT).show()
@@ -86,18 +85,15 @@ class RegisterActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            if (!isValidPassword(password)) {
-                Toast.makeText(this, "密碼格式錯誤 (至少6位英數字)", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-
             if (password != passwordConfirm) {
                 Toast.makeText(this, "密碼不一致", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
             val fullEmail = formatEmail(input)
-            NetworkManager.registerUser(fullEmail, password, verifyCode) { success ->
+            val deviceId = getUniqueDeviceId() // 使用修正後的函數名
+
+            NetworkManager.registerUser(fullEmail, password, verifyCode, deviceId) { success ->
                 runOnUiThread {
                     if (success) {
                         Toast.makeText(this, "註冊成功！", Toast.LENGTH_SHORT).show()
@@ -110,21 +106,14 @@ class RegisterActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 判定邏輯：8位純數字 -> @me.mcu.edu.tw (學生)
-     * 其他 -> @gmail.com (老師)
-     */
-    private fun formatEmail(input: String): String {
-        return if (input.length == 8 && input.all { it.isDigit() }) {
-            "$input@me.mcu.edu.tw"
-        } else {
-            "$input@gmail.com"
-        }
+    @SuppressLint("HardwareIds")
+    private fun getUniqueDeviceId(): String {
+        return Settings.Secure.getString(this.contentResolver, Settings.Secure.ANDROID_ID) ?: "Unknown"
     }
 
-    private fun isValidPassword(password: String): Boolean {
-        if (password.length < 6) return false
-        return password.matches(Regex("^[a-zA-Z0-9]*$"))
+    private fun formatEmail(input: String): String {
+        if (input.contains("@")) return input
+        return if (input.length == 8 && input.all { it.isDigit() }) "$input@me.mcu.edu.tw" else "$input@gmail.com"
     }
 
     private fun togglePasswordVisibility(editText: EditText, textInputLayout: TextInputLayout, isVisible: Boolean) {

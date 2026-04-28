@@ -70,7 +70,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="點名簽到"
+                android:text="安全點名簽到"
                 android:textColor="#333333"
                 android:textSize="20sp"
                 android:textStyle="bold" />
@@ -85,13 +85,32 @@
                 android:textSize="18sp"
                 android:textStyle="bold" />
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="請輸入點名代碼 (由老師提供)"
+                android:textColor="#666666"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/session_code_edittext"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@android:drawable/edit_text"
+                android:hint="例如: 1234"
+                android:inputType="number"
+                android:maxLength="4"
+                android:padding="12dp" />
+
             <Button
                 android:id="@+id/broadcast_button"
                 android:layout_width="match_parent"
                 android:layout_height="60dp"
                 android:layout_marginTop="24dp"
                 android:backgroundTint="#2196F3"
-                android:text="發送簽到訊息"
+                android:text="獲取 OTP 並發送簽到"
                 android:textAllCaps="false"
                 android:textColor="#FFFFFF"
                 android:textSize="18sp"

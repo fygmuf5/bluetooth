@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
+import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +36,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var statusTextView: TextView
     private lateinit var studentIdTextView: TextView
+    private lateinit var sessionCodeEditText: EditText
     private lateinit var broadcastButton: Button
     private lateinit var settingsButton: ImageButton
     private lateinit var studentCard: View
@@ -74,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private fun initializeUI() {
         statusTextView = findViewById(R.id.status_textview)
         studentIdTextView = findViewById(R.id.student_id_textview)
+        sessionCodeEditText = findViewById(R.id.session_code_edittext)
         broadcastButton = findViewById(R.id.broadcast_button)
         settingsButton = findViewById(R.id.settings_button)
         studentCard = findViewById(R.id.student_card)
@@ -94,7 +97,7 @@ class MainActivity : AppCompatActivity() {
             "STUDENT" -> {
                 teacherPagerContainer.visibility = View.GONE
                 studentCard.visibility = View.VISIBLE
-                statusTextView.text = "身份: 學生 (發送模式)"
+                statusTextView.text = "身份: 學生 (安全發送模式)"
                 studentIdTextView.text = "學號 : $studentId"
             }
             else -> {
@@ -127,9 +130,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         broadcastButton.setOnClickListener { 
-            // 學生點名時直接發送提取出的學號
+            val sessionCode = sessionCodeEditText.text.toString().trim()
+            if (sessionCode.isEmpty()) {
+                Toast.makeText(this, "請輸入點名代碼", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
             if (studentId.isNotEmpty() && studentId != "Unknown") {
-                if (checkAndRequestPermissions()) broadcastMessage(studentId)
+                if (checkAndRequestPermissions()) {
+                    // 1. 先向伺服器獲取 OTP 與 XOR Key
+                    statusTextView.text = "正在獲取安全權杖..."
+                    NetworkManager.getStudentToken(studentId) { otp, xorKey ->
+                        runOnUiThread {
+                            if (otp != null && xorKey != null) {
+                                // 2. 組合封包並加密發送
+                                broadcastEncryptedMessage(studentId, otp, xorKey)
+                            } else {
+                                statusTextView.text = "獲取權杖失敗，請確認代碼"
+                                Toast.makeText(this, "獲取 OTP 失敗", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
             } else {
                 Toast.makeText(this, "無法獲取學號資訊", Toast.LENGTH_SHORT).show()
             }
@@ -183,22 +205,42 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "未取得必要權限，功能無法運作", Toast.LENGTH_LONG).show()
     }
 
-    private fun broadcastMessage(message: String) {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) return
-        val payload = message.toByteArray(Charset.forName("UTF-8"))
+    /**
+     * 執行 XOR 加密並發送
+     */
+    private fun broadcastEncryptedMessage(id: String, otp: String, xorKey: String) {
+        // 封包結構：學號|OTP
+        val rawData = "$id|$otp"
+        val rawBytes = rawData.toByteArray(Charset.forName("UTF-8"))
+        val keyBytes = xorKey.toByteArray(Charset.forName("UTF-8"))
 
-        if (payload.size > 26) {
-            Toast.makeText(this, "訊息過長", Toast.LENGTH_SHORT).show()
+        // XOR 加密運算
+        val encryptedBytes = ByteArray(rawBytes.size)
+        for (i in rawBytes.indices) {
+            encryptedBytes[i] = (rawBytes[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
+        }
+
+        if (encryptedBytes.size > 26) {
+            Toast.makeText(this, "封包過大", Toast.LENGTH_SHORT).show()
             return
         }
 
         stopBleAdvertising()
         val settings = AdvertiseSettings.Builder().setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY).setConnectable(false).build()
-        val data = AdvertiseData.Builder().addServiceUuid(ParcelUuid(SERVICE_UUID)).addServiceData(ParcelUuid(SERVICE_UUID), payload).build()
+        val data = AdvertiseData.Builder()
+            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .addServiceData(ParcelUuid(SERVICE_UUID), encryptedBytes)
+            .build()
 
         bleAdvertiser.startAdvertising(settings, data, object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-                runOnUiThread { statusTextView.text = "Status: 正在發送簽到訊息($message)" }
+                runOnUiThread { 
+                    statusTextView.text = "Status: 已加密發送 (OTP: $otp)" 
+                    Toast.makeText(this@MainActivity, "簽到訊號發送中...", Toast.LENGTH_SHORT).show()
+                }
+            }
+            override fun onStartFailure(errorCode: Int) {
+                runOnUiThread { statusTextView.text = "發送失敗: $errorCode" }
             }
         })
     }
