@@ -10,25 +10,25 @@ import java.nio.charset.StandardCharsets
 object NetworkManager {
 
     // --- 1. 伺服器設定區 ---
-    // 將此處改為 ngrok 提供的手機公網網址
-    private const val BASE_URL = "https://你的ngrok代碼.ngrok-free.app"
+    private const val BASE_URL = "https://micronemous-indefeasibly-cooper.ngrok-free.app"
 
-    // Node.js RESTful API 路徑
-    private const val PATH_ATTENDANCE   = "/api/attendance"
-    private const val PATH_USER_INFO    = "/api/user/info"
-    private const val PATH_VERIFY_CODE  = "/api/auth/verify-code"
-    private const val PATH_REGISTER     = "/api/auth/register"
-    private const val PATH_LOGIN        = "/api/auth/login"
+    // 功能路徑
+    private const val PATH_ATTENDANCE   = "/api/check-in"
+    private const val PATH_USER_INFO    = "/api/my-courses"
+    private const val PATH_VERIFY_CODE  = "/api/send-code"
+    private const val PATH_REGISTER     = "/api/register"
+    private const val PATH_LOGIN        = "/api/auth/login" // 假設登入路徑
 
     private const val TIMEOUT_MS = 5000
 
     /**
-     * 登入驗證
+     * 登入驗證 (加入 device_id 驗證設備綁定)
      */
-    fun login(email: String, password: String, callback: (Boolean) -> Unit) {
+    fun login(email: String, password: String, deviceId: String, callback: (Boolean) -> Unit) {
         val json = JSONObject().apply {
             put("email", email)
             put("password", password)
+            put("device_id", deviceId)
         }
         sendJsonPost(BASE_URL + PATH_LOGIN, json, callback)
     }
@@ -55,21 +55,25 @@ object NetworkManager {
     }
 
     /**
-     * 註冊帳號 (移除 studentId，由伺服器端從 email 提取)
+     * 註冊帳號 (加入 device_id 進行首次綁定)
      */
-    fun registerUser(email: String, password: String, verifyCode: String, callback: (Boolean) -> Unit) {
+    fun registerUser(email: String, password: String, verifyCode: String, deviceId: String, callback: (Boolean) -> Unit) {
+        val studentId = email.substringBefore("@")
         val json = JSONObject().apply {
+            put("user_id", studentId) // 對應後端要求的 user_id
+            put("name", "User")        // 這裡暫時填 User，或由後端決定
             put("email", email)
             put("password", password)
-            put("verify_code", verifyCode)
+            put("code", verifyCode)    // 對應後端要求的 code
+            put("device_id", deviceId) // 對應後端要求的 device_id
         }
         sendJsonPost(BASE_URL + PATH_REGISTER, json, callback)
     }
 
     /**
-     * 同步用戶資訊
+     * 獲取課表
      */
-    fun syncUserInfo(studentInfo: String, callback: (Boolean) -> Unit) {
+    fun getMyCourses(studentInfo: String, callback: (Boolean) -> Unit) {
         val json = JSONObject().apply {
             put("student_info", studentInfo)
         }
