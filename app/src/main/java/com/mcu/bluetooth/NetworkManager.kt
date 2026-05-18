@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets
 object NetworkManager {
 
     // --- 1. 伺服器設定區 ---
-    private const val BASE_URL = "https://micronemous-indefeasibly-cooper.ngrok-free.dev/"
+    private const val BASE_URL = "https://clarity-afraid-cesspool.ngrok-free.dev/"
 
     // 原始功能路徑
     private const val PATH_ATTENDANCE   = "/api/check-in"
