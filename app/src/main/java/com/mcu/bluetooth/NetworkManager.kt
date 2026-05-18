@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets
 object NetworkManager {
 
     // --- 1. 伺服器設定區 ---
-    private const val BASE_URL = "https://micronemous-indefeasibly-cooper.ngrok-free.app"
+    private const val BASE_URL = "https://micronemous-indefeasibly-cooper.ngrok-free.dev/"
 
     // 原始功能路徑
     private const val PATH_ATTENDANCE   = "/api/check-in"
@@ -82,7 +82,7 @@ object NetworkManager {
         val studentId = email.substringBefore("@")
         val json = JSONObject().apply {
             put("user_id", studentId)
-            put("name", "User")
+            put("name", "User") // 這裡變回寫死的預設值，或是直接塞 studentId
             put("email", email)
             put("password", password)
             put("code", verifyCode)
