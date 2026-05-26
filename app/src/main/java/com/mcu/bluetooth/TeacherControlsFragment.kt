@@ -13,7 +13,6 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.ParcelUuid
 import android.provider.MediaStore
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -36,18 +35,19 @@ class TeacherControlsFragment : Fragment() {
     }
     private val bleScanner: BluetoothLeScanner? by lazy { bluetoothAdapter?.bluetoothLeScanner }
 
-    private lateinit var scanToggleButton: ToggleButton
+    private lateinit var btnStartAttendance: Button
+    private lateinit var btnStopAndUpload: Button
     private lateinit var exportCsvButton: Button
     private lateinit var devicesListView: ListView
+    private lateinit var tvTeacherStatus: TextView
     private lateinit var receivedBroadcastsAdapter: ArrayAdapter<String>
 
-    private val latestMessages = mutableMapOf<String, String>()
-    private val historyMessages = Collections.synchronizedList(mutableListOf<String>())
-    private val attendanceRecords = mutableMapOf<String, Pair<String, String>>()
+    private val attendanceResults = mutableMapOf<String, String>() // Address -> Display String
+    private val attendanceRecords = mutableMapOf<String, Pair<String, String>>() // Address -> (StudentId, Time)
     
-    // 安全驗證相關
     private var currentXorKey: String? = null
     private var otpVerifyList: Map<String, String>? = null
+    private var isScanning = false
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -57,29 +57,33 @@ class TeacherControlsFragment : Fragment() {
             startSecureSession()
         } else {
             Toast.makeText(requireContext(), "未取得藍牙掃描權限", Toast.LENGTH_LONG).show()
-            scanToggleButton.isChecked = false
         }
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_teacher_controls, container, false)
-        scanToggleButton = view.findViewById(R.id.scan_toggle_button)
+        btnStartAttendance = view.findViewById(R.id.btn_start_attendance)
+        btnStopAndUpload = view.findViewById(R.id.btn_stop_and_upload)
         exportCsvButton = view.findViewById(R.id.export_csv_button)
         devicesListView = view.findViewById(R.id.devices_listview)
+        tvTeacherStatus = view.findViewById(R.id.tv_teacher_status)
+        
         receivedBroadcastsAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_list_item_1)
         devicesListView.adapter = receivedBroadcastsAdapter
+        
         setupListeners()
         return view
     }
 
     private fun setupListeners() {
-        scanToggleButton.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked) {
-                checkAndRequestPermissions()
-            } else {
-                stopBleScan()
-            }
+        btnStartAttendance.setOnClickListener {
+            checkAndRequestPermissions()
         }
+
+        btnStopAndUpload.setOnClickListener {
+            stopAttendanceAndUpload()
+        }
+
         exportCsvButton.setOnClickListener { exportAttendanceToCsv() }
     }
 
@@ -99,36 +103,84 @@ class TeacherControlsFragment : Fragment() {
                 .setTitle("需要權限")
                 .setMessage("接收點名訊息需要藍牙掃描與定位權限。")
                 .setPositiveButton("確定") { _, _ -> requestPermissionsLauncher.launch(required) }
-                .setNegativeButton("取消") { _, _ -> scanToggleButton.isChecked = false }
+                .setNegativeButton("取消", null)
                 .show()
         }
     }
 
-    /**
-     * 啟動安全點名 Session：先拿金鑰，再拿 OTP 名單，最後啟動掃描
-     */
     private fun startSecureSession() {
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
+        tvTeacherStatus.text = "正在獲取伺服器金鑰..."
         
-        // 1. 向伺服器拿 XOR 金鑰
         NetworkManager.startAttendanceSession(email) { xorKey ->
             activity?.runOnUiThread {
                 if (xorKey != null) {
                     currentXorKey = xorKey
-                    // 2. 拿 OTP 驗證清單
-                    updateOtpVerifyList(email)
-                    startBleScan()
+                    fetchOtpTableAndStart(email)
                 } else {
-                    Toast.makeText(requireContext(), "無法啟動點名 Session", Toast.LENGTH_SHORT).show()
-                    scanToggleButton.isChecked = false
+                    tvTeacherStatus.text = "錯誤: 無法取得金鑰"
                 }
             }
         }
     }
 
-    private fun updateOtpVerifyList(email: String) {
+    private fun fetchOtpTableAndStart(email: String) {
         NetworkManager.getVerifyList(email) { list ->
-            otpVerifyList = list
+            activity?.runOnUiThread {
+                if (list != null && list.isNotEmpty()) {
+                    otpVerifyList = list
+                    tvTeacherStatus.text = "✅ 點名進行中 (已收到對照表)"
+                    startBleScan()
+                } else {
+                    tvTeacherStatus.text = "❌ 未收到對應表格"
+                    otpVerifyList = null
+                    startBleScan() // 依然啟動掃描供測試
+                }
+            }
+        }
+    }
+
+    private fun startBleScan() {
+        attendanceResults.clear()
+        attendanceRecords.clear()
+        updateListView()
+        
+        val filter = ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), null).build()
+        bleScanner?.startScan(listOf(filter), ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCallback)
+        
+        isScanning = true
+        btnStartAttendance.isEnabled = false
+        btnStopAndUpload.isEnabled = true
+    }
+
+    private fun stopAttendanceAndUpload() {
+        stopBleScan()
+        isScanning = false
+        btnStartAttendance.isEnabled = true
+        btnStopAndUpload.isEnabled = false
+        
+        tvTeacherStatus.text = "正在回傳名單至伺服器..."
+        
+        // 批次同步名單回伺服器 (這裡逐一呼叫 sync，實務上可改為批次 API)
+        val recordList = attendanceRecords.values.toList()
+        if (recordList.isEmpty()) {
+            tvTeacherStatus.text = "點名結束 (無成功紀錄)"
+            return
+        }
+
+        var successCount = 0
+        recordList.forEach { (id, _) ->
+            // 找到該學號對應的 address
+            val address = attendanceRecords.filterValues { it.first == id }.keys.firstOrNull() ?: ""
+            NetworkManager.syncAttendance(id, address) { success ->
+                if (success) successCount++
+                if (successCount == recordList.size || recordList.indexOf(Pair(id, "")) == recordList.size - 1) {
+                    activity?.runOnUiThread {
+                        tvTeacherStatus.text = "點名結束，已回傳 ${recordList.size} 筆紀錄"
+                        Toast.makeText(requireContext(), "名單回傳完成", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
     }
 
@@ -151,37 +203,30 @@ class TeacherControlsFragment : Fragment() {
             if (parts.size < 2) return
             val studentId = parts[0]
             val receivedOtp = parts[1]
+            val address = result.device.address
 
             // 3. 驗證 OTP
             val expectedOtp = otpVerifyList?.get(studentId)
-            if (receivedOtp == expectedOtp) {
-                processValidCheckIn(studentId, result.device.address)
-            }
+            val isSuccess = expectedOtp != null && receivedOtp == expectedOtp
+
+            processCheckInResult(studentId, address, isSuccess)
         }
     }
 
-    private fun processValidCheckIn(id: String, address: String) {
-        val finalMsg = "✅ [簽到成功] $id"
+    private fun processCheckInResult(id: String, address: String, isSuccess: Boolean) {
+        val statusText = if (isSuccess) "✅ 點名成功" else "❌ 點名失敗 (OTP不符)"
+        val displayMsg = "[$id] $statusText\n設備: $address"
         val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         
         activity?.runOnUiThread {
-            if (latestMessages[address] != finalMsg) {
-                latestMessages[address] = finalMsg
-                attendanceRecords[address] = Pair(id, timeString)
+            if (attendanceResults[address] != displayMsg) {
+                attendanceResults[address] = displayMsg
+                if (isSuccess) {
+                    attendanceRecords[address] = Pair(id, timeString)
+                }
                 updateListView()
-                // 同步結果回伺服器
-                NetworkManager.syncAttendance(id, address) { _ -> }
             }
         }
-    }
-
-    private fun startBleScan() {
-        latestMessages.clear()
-        historyMessages.clear()
-        attendanceRecords.clear()
-        updateListView()
-        val filter = ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), null).build()
-        bleScanner?.startScan(listOf(filter), ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCallback)
     }
 
     private fun stopBleScan() {
@@ -189,10 +234,7 @@ class TeacherControlsFragment : Fragment() {
     }
 
     private fun updateListView() {
-        val displayList = mutableListOf<String>()
-        latestMessages.keys.sorted().forEach { addr ->
-            displayList.add("${latestMessages[addr]}\n[$addr]")
-        }
+        val displayList = attendanceResults.values.toList().reversed()
         receivedBroadcastsAdapter.clear()
         receivedBroadcastsAdapter.addAll(displayList)
         receivedBroadcastsAdapter.notifyDataSetChanged()
@@ -200,7 +242,7 @@ class TeacherControlsFragment : Fragment() {
 
     private fun exportAttendanceToCsv() {
         if (attendanceRecords.isEmpty()) {
-            Toast.makeText(requireContext(), "目前沒有點名紀錄", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "目前沒有成功紀錄可匯出", Toast.LENGTH_SHORT).show()
             return
         }
         val fileName = "點名紀錄_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.csv"
