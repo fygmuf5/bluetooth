@@ -42,7 +42,7 @@
                     android:layout_weight="1"
                     android:layout_marginEnd="8dp"
                     android:backgroundTint="#4CAF50"
-                    android:text="發起點名"
+                    android:text="開始加密點名"
                     android:textColor="#FFFFFF"
                     android:textStyle="bold" />
 
@@ -51,9 +51,10 @@
                     android:layout_width="0dp"
                     android:layout_height="60dp"
                     android:layout_weight="1"
+                    android:layout_marginStart="8dp"
                     android:backgroundTint="#F44336"
                     android:enabled="false"
-                    android:text="回傳並停止"
+                    android:text="停止並回傳名單"
                     android:textColor="#FFFFFF"
                     android:textStyle="bold" />
             </LinearLayout>

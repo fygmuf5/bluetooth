@@ -129,12 +129,12 @@ class TeacherControlsFragment : Fragment() {
             activity?.runOnUiThread {
                 if (list != null && list.isNotEmpty()) {
                     otpVerifyList = list
-                    tvTeacherStatus.text = "✅ 點名進行中 (已收到對照表)"
+                    tvTeacherStatus.text = "✅ 加密點名中 (已獲取對照表)"
                     startBleScan()
                 } else {
                     tvTeacherStatus.text = "❌ 未收到對應表格"
                     otpVerifyList = null
-                    startBleScan() // 依然啟動掃描供測試
+                    startBleScan() 
                 }
             }
         }
@@ -159,24 +159,20 @@ class TeacherControlsFragment : Fragment() {
         btnStartAttendance.isEnabled = true
         btnStopAndUpload.isEnabled = false
         
-        tvTeacherStatus.text = "正在回傳名單至伺服器..."
-        
-        // 批次同步名單回伺服器 (這裡逐一呼叫 sync，實務上可改為批次 API)
+        tvTeacherStatus.text = "正在批次上傳紀錄..."
         val recordList = attendanceRecords.values.toList()
         if (recordList.isEmpty()) {
-            tvTeacherStatus.text = "點名結束 (無成功紀錄)"
+            tvTeacherStatus.text = "點名結束 (無紀錄)"
             return
         }
 
-        var successCount = 0
-        recordList.forEach { (id, _) ->
-            // 找到該學號對應的 address
-            val address = attendanceRecords.filterValues { it.first == id }.keys.firstOrNull() ?: ""
-            NetworkManager.syncAttendance(id, address) { success ->
-                if (success) successCount++
-                if (successCount == recordList.size || recordList.indexOf(Pair(id, "")) == recordList.size - 1) {
+        var count = 0
+        attendanceRecords.forEach { (address, pair) ->
+            NetworkManager.syncAttendance(pair.first, address) {
+                count++
+                if (count == attendanceRecords.size) {
                     activity?.runOnUiThread {
-                        tvTeacherStatus.text = "點名結束，已回傳 ${recordList.size} 筆紀錄"
+                        tvTeacherStatus.text = "點名結束，已回傳 $count 筆紀錄"
                         Toast.makeText(requireContext(), "名單回傳完成", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -187,9 +183,10 @@ class TeacherControlsFragment : Fragment() {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val payload = result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
+            val address = result.device.address
+            
+            // 加密模式：需 XOR 解密
             val xorKey = currentXorKey ?: return
-
-            // 1. XOR 解密
             val keyBytes = xorKey.toByteArray(Charset.forName("UTF-8"))
             val decryptedBytes = ByteArray(payload.size)
             for (i in payload.indices) {
@@ -197,24 +194,21 @@ class TeacherControlsFragment : Fragment() {
             }
             val decryptedStr = String(decryptedBytes, Charset.forName("UTF-8"))
 
-            // 2. 解析封包 (學號|OTP)
-            if (!decryptedStr.contains("|")) return
-            val parts = decryptedStr.split("|")
-            if (parts.size < 2) return
-            val studentId = parts[0]
-            val receivedOtp = parts[1]
-            val address = result.device.address
-
-            // 3. 驗證 OTP
-            val expectedOtp = otpVerifyList?.get(studentId)
-            val isSuccess = expectedOtp != null && receivedOtp == expectedOtp
-
-            processCheckInResult(studentId, address, isSuccess)
+            if (decryptedStr.contains("|")) {
+                val parts = decryptedStr.split("|")
+                if (parts.size >= 2) {
+                    val studentId = parts[0]
+                    val receivedOtp = parts[1]
+                    val expectedOtp = otpVerifyList?.get(studentId)
+                    val isSuccess = expectedOtp != null && receivedOtp == expectedOtp
+                    processCheckInResult(studentId, address, isSuccess)
+                }
+            }
         }
     }
 
     private fun processCheckInResult(id: String, address: String, isSuccess: Boolean) {
-        val statusText = if (isSuccess) "✅ 點名成功" else "❌ 點名失敗 (OTP不符)"
+        val statusText = if (isSuccess) "✅ 點名成功" else "❌ 點名失敗"
         val displayMsg = "[$id] $statusText\n設備: $address"
         val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         

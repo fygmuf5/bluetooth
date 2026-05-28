@@ -34,7 +34,7 @@
         </RelativeLayout>
     </androidx.appcompat.widget.Toolbar>
 
-    <!-- 學生介面 (移除文字框) -->
+    <!-- 學生介面 -->
     <androidx.cardview.widget.CardView
         android:id="@+id/student_card"
         android:layout_width="match_parent"
@@ -62,7 +62,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="點擊下方按鈕即可自動獲取權杖並簽到"
+                android:text="點擊按鈕即可自動獲取權杖並發送加密訊號"
                 android:textColor="#888888"
                 android:textSize="14sp" />
 
@@ -70,14 +70,13 @@
                 android:id="@+id/broadcast_button"
                 android:layout_width="match_parent"
                 android:layout_height="64dp"
-                android:layout_marginTop="32dp"
+                android:layout_marginTop="24dp"
                 android:backgroundTint="#4CAF50"
-                android:text="發送簽到訊號"
+                android:text="發送加密簽到訊號"
                 android:textSize="18sp"
                 android:textStyle="bold"
                 app:cornerRadius="12dp" />
-            
-            <!-- 隱藏 EditText 以免代碼崩潰，但介面上不顯示 -->
+
             <EditText
                 android:id="@+id/session_code_edittext"
                 android:layout_width="0dp"

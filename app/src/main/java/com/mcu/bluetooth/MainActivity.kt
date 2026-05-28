@@ -203,7 +203,11 @@ class MainActivity : AppCompatActivity() {
             encryptedBytes[i] = (rawBytes[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
         }
 
-        if (encryptedBytes.size > 26) {
+        startAdvertising(encryptedBytes, "狀態: 簽到訊號發送中 (OTP: $otp)")
+    }
+
+    private fun startAdvertising(dataBytes: ByteArray, statusMsg: String) {
+        if (dataBytes.size > 26) {
             Toast.makeText(this, "封包過大", Toast.LENGTH_SHORT).show()
             return
         }
@@ -215,14 +219,14 @@ class MainActivity : AppCompatActivity() {
             .build()
         val data = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
-            .addServiceData(ParcelUuid(SERVICE_UUID), encryptedBytes)
+            .addServiceData(ParcelUuid(SERVICE_UUID), dataBytes)
             .build()
 
         bleAdvertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
                 runOnUiThread { 
-                    statusTextView.text = "狀態: 簽到訊號發送中 (OTP: $otp)" 
-                    Toast.makeText(this@MainActivity, "簽到訊號發送中...", Toast.LENGTH_SHORT).show()
+                    statusTextView.text = statusMsg
+                    Toast.makeText(this@MainActivity, "訊號發送中...", Toast.LENGTH_SHORT).show()
                 }
             }
             override fun onStartFailure(errorCode: Int) {
