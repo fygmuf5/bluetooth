@@ -8,16 +8,22 @@ import android.bluetooth.le.*
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.*
 import android.provider.MediaStore
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.tabs.TabLayout
 import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.*
@@ -26,22 +32,32 @@ import java.util.*
 class TeacherControlsFragment : Fragment() {
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    private val REFRESH_INTERVAL = 5 * 60 * 1000L // 5 分鐘
+    private val REFRESH_INTERVAL = 5 * 60 * 1000L
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         (requireContext().getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     }
     private val bleScanner: BluetoothLeScanner? by lazy { bluetoothAdapter?.bluetoothLeScanner }
 
-    private lateinit var btnStartAttendance: Button
-    private lateinit var btnStopAndUpload: Button
+    private lateinit var btnAttendanceToggle: Button
     private lateinit var exportCsvButton: Button
     private lateinit var devicesListView: ListView
     private lateinit var tvTeacherStatus: TextView
+    private lateinit var tvAttendanceSummary: TextView
+    private lateinit var btnSelectAll: Button
+    private lateinit var etStudentSearch: EditText
+    private lateinit var layoutStudentGridContainer: View
     private lateinit var receivedBroadcastsAdapter: ArrayAdapter<String>
+    
+    private lateinit var teacherTabs: TabLayout
+    private lateinit var layoutRealtimeList: View
+    private lateinit var rvStudentGrid: RecyclerView
+    private lateinit var gridAdapter: StudentGridAdapter
 
     private val attendanceResults = mutableMapOf<String, String>()
-    private val attendanceRecords = mutableMapOf<String, Pair<String, String>>()
+    private val attendanceRecords = mutableMapOf<String, Pair<String, String>>() 
+    private var allStudentsList = mutableListOf<StudentStatus>() 
+    private var filteredStudentsList = mutableListOf<StudentStatus>()
     
     private var currentXorKey: String? = null
     private var otpVerifyList: Map<String, String>? = null
@@ -57,42 +73,106 @@ class TeacherControlsFragment : Fragment() {
         }
     }
 
+    data class StudentStatus(val id: String, var isPresent: Boolean = false)
+
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
         if (perms.values.all { it }) startSecureSessionLoop()
-        else Toast.makeText(requireContext(), "未取得權限", Toast.LENGTH_LONG).show()
+        else Toast.makeText(requireContext(), "請授權權限以開始點名", Toast.LENGTH_SHORT).show()
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_teacher_controls, container, false)
-        btnStartAttendance = view.findViewById(R.id.btn_start_attendance)
-        btnStopAndUpload = view.findViewById(R.id.btn_stop_and_upload)
+        
+        btnAttendanceToggle = view.findViewById(R.id.btn_attendance_toggle)
         exportCsvButton = view.findViewById(R.id.export_csv_button)
         devicesListView = view.findViewById(R.id.devices_listview)
         tvTeacherStatus = view.findViewById(R.id.tv_teacher_status)
+        tvAttendanceSummary = view.findViewById(R.id.tv_attendance_summary)
+        btnSelectAll = view.findViewById(R.id.btn_select_all)
+        etStudentSearch = view.findViewById(R.id.et_student_search)
+        layoutStudentGridContainer = view.findViewById(R.id.layout_student_grid_container)
+        
+        teacherTabs = view.findViewById(R.id.teacher_tabs)
+        layoutRealtimeList = view.findViewById(R.id.layout_realtime_list)
+        rvStudentGrid = view.findViewById(R.id.rv_student_grid)
         
         receivedBroadcastsAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_list_item_1)
         devicesListView.adapter = receivedBroadcastsAdapter
         
+        setupRecyclerView()
         setupListeners()
         return view
     }
 
+    private fun setupRecyclerView() {
+        gridAdapter = StudentGridAdapter(filteredStudentsList)
+        rvStudentGrid.layoutManager = GridLayoutManager(context, 3)
+        rvStudentGrid.adapter = gridAdapter
+    }
+
     private fun setupListeners() {
-        btnStartAttendance.setOnClickListener {
+        btnAttendanceToggle.setOnClickListener {
             if (!isScanning) {
                 checkAndRequestPermissions()
             } else {
                 stopAttendanceAndUpload()
             }
         }
+        exportCsvButton.setOnClickListener { exportAttendanceToCsv() }
 
-        btnStopAndUpload.setOnClickListener {
-            stopAttendanceAndUpload()
+        btnSelectAll.setOnClickListener {
+            val targetStatus = !allStudentsList.all { it.isPresent }
+            allStudentsList.forEach { it.isPresent = targetStatus }
+            gridAdapter.notifyDataSetChanged()
+            updateAttendanceSummary()
         }
 
-        exportCsvButton.setOnClickListener { exportAttendanceToCsv() }
+        etStudentSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                filterStudents(s.toString())
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        teacherTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                if (tab?.position == 0) {
+                    layoutRealtimeList.visibility = View.VISIBLE
+                    layoutStudentGridContainer.visibility = View.GONE
+                    btnSelectAll.visibility = View.GONE
+                } else {
+                    layoutRealtimeList.visibility = View.GONE
+                    layoutStudentGridContainer.visibility = View.VISIBLE
+                    btnSelectAll.visibility = View.VISIBLE
+                    filterStudents(etStudentSearch.text.toString())
+                }
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
+        })
+    }
+
+    @SuppressLint("NotifyDataSetChanged")
+    private fun filterStudents(query: String) {
+        filteredStudentsList.clear()
+        if (query.isEmpty()) {
+            filteredStudentsList.addAll(allStudentsList)
+        } else {
+            val lowerCaseQuery = query.lowercase()
+            allStudentsList.filter { it.id.lowercase().contains(lowerCaseQuery) }
+                .forEach { filteredStudentsList.add(it) }
+        }
+        gridAdapter.notifyDataSetChanged()
+    }
+
+    private fun updateAttendanceSummary() {
+        val total = allStudentsList.size
+        val present = allStudentsList.count { it.isPresent }
+        val percent = if (total > 0) (present * 100 / total) else 0
+        tvAttendanceSummary.text = "出席：$present / $total ($percent%)"
     }
 
     private fun checkAndRequestPermissions() {
@@ -100,28 +180,32 @@ class TeacherControlsFragment : Fragment() {
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         } else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
 
-        if (required.all { ContextCompat.checkSelfPermission(requireContext(), it) == PackageManager.PERMISSION_GRANTED }) {
-            startSecureSessionLoop()
-        } else {
-            requestPermissionsLauncher.launch(required)
-        }
+        val missing = required.filter { ContextCompat.checkSelfPermission(requireContext(), it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) startSecureSessionLoop()
+        else requestPermissionsLauncher.launch(required)
     }
 
     private fun startSecureSessionLoop() {
+        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
+            Toast.makeText(requireContext(), "請先開啟藍牙", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         isScanning = true
-        btnStartAttendance.text = "停止點名"
-        btnStartAttendance.backgroundTintList = ContextCompat.getColorStateList(requireContext(), android.R.color.holo_red_dark)
-        btnStopAndUpload.isEnabled = true
+        btnAttendanceToggle.text = "停止並回傳"
+        btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#F44336"))
         
         attendanceResults.clear()
         attendanceRecords.clear()
-        updateListView()
         
-        // 立即執行第一次並啟動循環
+        allStudentsList.forEach { it.isPresent = false }
+        filterStudents(etStudentSearch.text.toString())
+        updateListView()
+        updateAttendanceSummary()
+        
         performSessionRefresh()
         handler.postDelayed(refreshRunnable, REFRESH_INTERVAL)
         
-        // 啟動藍牙掃描
         val filter = ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), null).build()
         bleScanner?.startScan(listOf(filter), ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCallback)
     }
@@ -137,11 +221,24 @@ class TeacherControlsFragment : Fragment() {
                     NetworkManager.getVerifyList(email) { list ->
                         activity?.runOnUiThread {
                             otpVerifyList = list
-                            tvTeacherStatus.text = "✅ 點名自動同步中 (${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())})"
+                            updateGridFromOtpList(list)
+                            tvTeacherStatus.text = "✅ 點名循環中 (${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())})"
                         }
                     }
                 }
             }
+        }
+    }
+
+    @SuppressLint("NotifyDataSetChanged")
+    private fun updateGridFromOtpList(list: Map<String, String>?) {
+        if (list == null) return
+        val studentIds = list.keys.toList().sorted()
+        
+        if (allStudentsList.isEmpty()) {
+            studentIds.forEach { id -> allStudentsList.add(StudentStatus(id)) }
+            filterStudents(etStudentSearch.text.toString())
+            updateAttendanceSummary()
         }
     }
 
@@ -150,13 +247,19 @@ class TeacherControlsFragment : Fragment() {
         handler.removeCallbacks(refreshRunnable)
         try { bleScanner?.stopScan(scanCallback) } catch(e: Exception){}
         
-        btnStartAttendance.text = "開始加密點名"
-        btnStartAttendance.backgroundTintList = ContextCompat.getColorStateList(requireContext(), R.color.design_default_color_primary) // 或原本顏色
-        btnStopAndUpload.isEnabled = false
+        btnAttendanceToggle.text = "開始點名"
+        btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#4CAF50"))
         
-        tvTeacherStatus.text = "正在回傳名單..."
-        val recordList = attendanceRecords.values.toList()
-        if (recordList.isEmpty()) {
+        tvTeacherStatus.text = "正在回傳點名結果..."
+        
+        val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        allStudentsList.filter { it.isPresent }.forEach { student ->
+            if (attendanceRecords.values.none { it.first == student.id }) {
+                attendanceRecords["Manual_${student.id}"] = Pair(student.id, timeNow)
+            }
+        }
+
+        if (attendanceRecords.isEmpty()) {
             tvTeacherStatus.text = "點名結束 (無紀錄)"
             return
         }
@@ -167,8 +270,8 @@ class TeacherControlsFragment : Fragment() {
                 count++
                 if (count == attendanceRecords.size) {
                     activity?.runOnUiThread {
-                        tvTeacherStatus.text = "點名結束，已回傳 $count 筆紀錄"
-                        Toast.makeText(requireContext(), "回傳完成", Toast.LENGTH_SHORT).show()
+                        tvTeacherStatus.text = "點名結束，已同步 $count 位學生"
+                        Toast.makeText(requireContext(), "點名名單回傳完成", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -195,21 +298,32 @@ class TeacherControlsFragment : Fragment() {
                     val receivedOtp = parts[1]
                     val expectedOtp = otpVerifyList?.get(studentId)
                     if (expectedOtp != null && receivedOtp == expectedOtp) {
-                        processCheckInResult(studentId, address, true)
+                        processCheckInResult(studentId, address)
                     }
                 }
             }
         }
     }
 
-    private fun processCheckInResult(id: String, address: String, isSuccess: Boolean) {
-        val displayMsg = "[$id] ✅ 點名成功\n設備: $address"
+    private fun processCheckInResult(id: String, address: String) {
         val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val displayMsg = "[$id] ✅ 點名成功 ($timeString)"
+        
         activity?.runOnUiThread {
             if (attendanceResults[address] != displayMsg) {
                 attendanceResults[address] = displayMsg
                 attendanceRecords[address] = Pair(id, timeString)
                 updateListView()
+                
+                val indexInFull = allStudentsList.indexOfFirst { it.id == id }
+                if (indexInFull != -1 && !allStudentsList[indexInFull].isPresent) {
+                    allStudentsList[indexInFull].isPresent = true
+                    val indexInFiltered = filteredStudentsList.indexOfFirst { it.id == id }
+                    if (indexInFiltered != -1) {
+                        gridAdapter.notifyItemChanged(indexInFiltered)
+                    }
+                    updateAttendanceSummary()
+                }
             }
         }
     }
@@ -222,10 +336,20 @@ class TeacherControlsFragment : Fragment() {
     }
 
     private fun exportAttendanceToCsv() {
-        if (attendanceRecords.isEmpty()) return
-        val fileName = "點名紀錄_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.csv"
-        val csvContent = StringBuilder().append("學號,設備地址,簽到時間\n")
-        attendanceRecords.forEach { (address, pair) -> csvContent.append("${pair.first},$address,${pair.second}\n") }
+        if (attendanceRecords.isEmpty() && allStudentsList.none { it.isPresent }) {
+            Toast.makeText(requireContext(), "無點名資料可匯出", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val fileName = "點名結果_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.csv"
+        val csvContent = StringBuilder().append("學號,來源,時間\n")
+        
+        allStudentsList.filter { it.isPresent }.forEach { student ->
+            val record = attendanceRecords.entries.find { it.value.first == student.id }
+            val source = if (record != null) record.key else "手動勾選"
+            val time = if (record != null) record.value.second else "N/A"
+            csvContent.append("${student.id},$source,$time\n")
+        }
+
         try {
             val contentValues = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -238,14 +362,63 @@ class TeacherControlsFragment : Fragment() {
                     os?.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()))
                     os?.write(csvContent.toString().toByteArray(Charset.forName("UTF-8")))
                 }
-                Toast.makeText(requireContext(), "檔案已儲存：$fileName", Toast.LENGTH_LONG).show()
+                Toast.makeText(requireContext(), "CSV 已儲存至下載資料夾", Toast.LENGTH_LONG).show()
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Toast.makeText(requireContext(), "匯出失敗: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(refreshRunnable)
         try { bleScanner?.stopScan(scanCallback) } catch(e: Exception){}
+    }
+
+    inner class StudentGridAdapter(private val students: List<StudentStatus>) : RecyclerView.Adapter<StudentGridAdapter.ViewHolder>() {
+        inner class ViewHolder(v: View) : RecyclerView.ViewHolder(v) {
+            val tvId: TextView = v.findViewById(R.id.tv_grid_student_id)
+            val cbStatus: CheckBox = v.findViewById(R.id.cb_attendance_status)
+            val cardView: View = v.findViewById(R.id.student_card_view)
+        }
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+            val v = LayoutInflater.from(parent.context).inflate(R.layout.item_student_grid, parent, false)
+            return ViewHolder(v)
+        }
+        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+            val student = students[position]
+            holder.tvId.text = student.id
+            
+            holder.cbStatus.setOnCheckedChangeListener(null)
+            holder.cbStatus.isChecked = student.isPresent
+            
+            updateItemVisual(holder, student.isPresent)
+            
+            val toggleAction = { isChecked: Boolean ->
+                student.isPresent = isChecked
+                updateItemVisual(holder, isChecked)
+                updateAttendanceSummary()
+            }
+
+            holder.cbStatus.setOnCheckedChangeListener { _, isChecked -> toggleAction(isChecked) }
+            holder.cardView.setOnClickListener {
+                val nextState = !student.isPresent
+                holder.cbStatus.isChecked = nextState
+            }
+        }
+        
+        private fun updateItemVisual(holder: ViewHolder, isPresent: Boolean) {
+            if (isPresent) {
+                holder.cardView.setBackgroundColor(Color.parseColor("#E8F5E9"))
+                holder.tvId.textColor(Color.parseColor("#2E7D32"))
+            } else {
+                holder.cardView.setBackgroundColor(Color.WHITE)
+                holder.tvId.textColor(Color.parseColor("#333333"))
+            }
+        }
+
+        private fun TextView.textColor(color: Int) = setTextColor(color)
+
+        override fun getItemCount() = students.size
     }
 }
