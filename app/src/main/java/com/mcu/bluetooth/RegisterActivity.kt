@@ -66,10 +66,13 @@ class RegisterActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             val fullEmail = formatEmail(input)
-            NetworkManager.requestVerifyCode(fullEmail) { success ->
+            NetworkManager.requestVerifyCode(fullEmail) { success, message ->
                 runOnUiThread {
-                    if (success) Toast.makeText(this, "驗證碼已寄出", Toast.LENGTH_SHORT).show()
-                    else Toast.makeText(this, "發送失敗", Toast.LENGTH_SHORT).show()
+                    if (success) {
+                        Toast.makeText(this, message ?: "驗證碼已寄出", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, message ?: "發送失敗", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -91,15 +94,16 @@ class RegisterActivity : AppCompatActivity() {
             }
 
             val fullEmail = formatEmail(input)
-            val deviceId = getUniqueDeviceId() // 使用修正後的函數名
+            val deviceId = getUniqueDeviceId()
 
-            NetworkManager.registerUser(fullEmail, password, verifyCode, deviceId) { success ->
+            NetworkManager.registerUser(fullEmail, password, verifyCode, deviceId) { success, message ->
                 runOnUiThread {
                     if (success) {
                         Toast.makeText(this, "註冊成功！", Toast.LENGTH_SHORT).show()
                         finish()
                     } else {
-                        Toast.makeText(this, "註冊失敗", Toast.LENGTH_SHORT).show()
+                        // 這裡會顯示伺服器回傳的錯誤訊息，例如「帳號已存在」
+                        Toast.makeText(this, message ?: "註冊失敗", Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -113,7 +117,12 @@ class RegisterActivity : AppCompatActivity() {
 
     private fun formatEmail(input: String): String {
         if (input.contains("@")) return input
-        return if (input.length == 8 && input.all { it.isDigit() }) "$input@me.mcu.edu.tw" else "$input@gmail.com"
+        // 學生：8位數字 -> @me.mcu.edu.tw
+        if (input.length == 8 && input.all { it.isDigit() }) {
+            return "$input@me.mcu.edu.tw"
+        }
+        // 老師/職員：英文字元或非8位數字帳號 -> @mail.mcu.edu.tw
+        return "$input@mail.mcu.edu.tw"
     }
 
     private fun togglePasswordVisibility(editText: EditText, textInputLayout: TextInputLayout, isVisible: Boolean) {

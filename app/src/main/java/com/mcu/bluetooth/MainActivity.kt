@@ -8,9 +8,7 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
-import android.os.ParcelUuid
+import android.os.*
 import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,12 +19,14 @@ import androidx.fragment.app.Fragment
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
 import java.nio.charset.Charset
+import java.text.SimpleDateFormat
 import java.util.*
 
 @SuppressLint("MissingPermission")
 class MainActivity : AppCompatActivity() {
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
+    private val AUTO_REFRESH_INTERVAL = 5 * 60 * 1000L // 5 分鐘自動刷新一次
 
     private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
     private val bluetoothAdapter: BluetoothAdapter? by lazy { bluetoothManager.adapter }
@@ -46,12 +46,21 @@ class MainActivity : AppCompatActivity() {
     private var userEmail: String? = null
     private var studentId: String = ""
 
+    private val handler = Handler(Looper.getMainLooper())
+    private val autoAttendanceRunnable = object : Runnable {
+        override fun run() {
+            if (currentRole == "STUDENT") {
+                startAutomaticAttendance()
+                handler.postDelayed(this, AUTO_REFRESH_INTERVAL)
+            }
+        }
+    }
+
     private val requestBluetoothPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
-        val allGranted = perms.values.all { it }
-        if (allGranted) {
-            Toast.makeText(this, "權限已取得，請再次點擊按鈕", Toast.LENGTH_SHORT).show()
+        if (perms.values.all { it }) {
+            startAutomaticAttendance()
         } else {
-            showPermissionExplanation()
+            Toast.makeText(this, "未取得權限，自動點名無法運作", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -61,12 +70,16 @@ class MainActivity : AppCompatActivity() {
 
         currentRole = intent.getStringExtra("EXTRA_ROLE")
         userEmail = intent.getStringExtra("EXTRA_EMAIL")
-        
         studentId = userEmail?.substringBefore("@") ?: "Unknown"
 
         initializeUI()
         setupRoleUI()
         setupListeners()
+
+        if (currentRole == "STUDENT") {
+            // 學生端進入後自動開始第一次點名流程
+            checkAndStartAutoAttendance()
+        }
     }
 
     private fun initializeUI() {
@@ -79,6 +92,9 @@ class MainActivity : AppCompatActivity() {
         viewPager = findViewById(R.id.teacher_view_pager)
         dot1 = findViewById(R.id.dot1)
         dot2 = findViewById(R.id.dot2)
+        
+        // 學生端的按鈕改為手動刷新，但主要是自動
+        broadcastButton.text = "手動立即簽到"
     }
 
     private fun setupRoleUI() {
@@ -86,13 +102,13 @@ class MainActivity : AppCompatActivity() {
             "TEACHER" -> {
                 teacherPagerContainer.visibility = View.VISIBLE
                 studentCard.visibility = View.GONE
-                statusTextView.text = "身份: 老師 (左右滑動切換)"
+                statusTextView.text = "身份: 老師 (點名週期運行中)"
                 setupTeacherViewPager()
             }
             "STUDENT" -> {
                 teacherPagerContainer.visibility = View.GONE
                 studentCard.visibility = View.VISIBLE
-                statusTextView.text = "身份: 學生 (點擊按鈕簽到)"
+                statusTextView.text = "身份: 學生 (背景自動點名中)"
                 studentIdTextView.text = "學號 : $studentId"
             }
             else -> {
@@ -125,28 +141,38 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         broadcastButton.setOnClickListener { 
-            if (studentId.isEmpty() || studentId == "Unknown") {
-                Toast.makeText(this, "無法獲取學號資訊", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-
-            if (checkAndRequestPermissions()) {
-                statusTextView.text = "正在獲取安全權杖..."
-                NetworkManager.getStudentToken(studentId) { otp, xorKey ->
-                    runOnUiThread {
-                        if (otp != null && xorKey != null) {
-                            broadcastEncryptedMessage(studentId, otp, xorKey)
-                        } else {
-                            statusTextView.text = "狀態: 未收到OTP"
-                            Toast.makeText(this, "未收到OTP", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            }
+            startAutomaticAttendance()
         }
 
         settingsButton.setOnClickListener { view ->
             showSettingsMenu(view)
+        }
+    }
+
+    private fun checkAndStartAutoAttendance() {
+        if (hasRequiredBluetoothPermissions()) {
+            handler.post(autoAttendanceRunnable)
+        } else {
+            requestBluetoothPermissions.launch(getRequiredBluetoothPermissions())
+        }
+    }
+
+    private fun startAutomaticAttendance() {
+        if (studentId.isEmpty() || studentId == "Unknown") return
+
+        val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        statusTextView.text = "狀態: 正在同步權杖 ($timeNow)..."
+
+        NetworkManager.getStudentToken(studentId) { otp, xorKey ->
+            runOnUiThread {
+                if (otp != null && xorKey != null) {
+                    broadcastEncryptedMessage(studentId, otp, xorKey)
+                    statusTextView.text = "狀態: 自動發送中 (OTP: $otp)"
+                } else {
+                    statusTextView.text = "狀態: 目前無點名活動 ($timeNow)"
+                    stopBleAdvertising()
+                }
+            }
         }
     }
 
@@ -162,11 +188,7 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 2 -> {
-                    stopBleAdvertising()
-                    val intent = Intent(this, RoleSelectionActivity::class.java)
-                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    startActivity(intent)
-                    finish()
+                    logout()
                     true
                 }
                 else -> false
@@ -175,22 +197,13 @@ class MainActivity : AppCompatActivity() {
         popup.show()
     }
 
-    private fun checkAndRequestPermissions(): Boolean {
-        if (hasRequiredBluetoothPermissions()) return true
-        
-        AlertDialog.Builder(this)
-            .setTitle("需要權限")
-            .setMessage("本功能需要藍牙與定位權限來發送點名訊號。")
-            .setPositiveButton("確定") { _, _ ->
-                requestBluetoothPermissions.launch(getRequiredBluetoothPermissions())
-            }
-            .setNegativeButton("取消", null)
-            .show()
-        return false
-    }
-
-    private fun showPermissionExplanation() {
-        Toast.makeText(this, "未取得必要權限，功能無法運作", Toast.LENGTH_LONG).show()
+    private fun logout() {
+        handler.removeCallbacks(autoAttendanceRunnable)
+        stopBleAdvertising()
+        val intent = Intent(this, RoleSelectionActivity::class.java)
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(intent)
+        finish()
     }
 
     private fun broadcastEncryptedMessage(id: String, otp: String, xorKey: String) {
@@ -202,15 +215,11 @@ class MainActivity : AppCompatActivity() {
         for (i in rawBytes.indices) {
             encryptedBytes[i] = (rawBytes[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
         }
-
-        startAdvertising(encryptedBytes, "狀態: 簽到訊號發送中 (OTP: $otp)")
+        startAdvertising(encryptedBytes)
     }
 
-    private fun startAdvertising(dataBytes: ByteArray, statusMsg: String) {
-        if (dataBytes.size > 26) {
-            Toast.makeText(this, "封包過大", Toast.LENGTH_SHORT).show()
-            return
-        }
+    private fun startAdvertising(dataBytes: ByteArray) {
+        if (dataBytes.size > 26) return
 
         stopBleAdvertising()
         val settings = AdvertiseSettings.Builder()
@@ -223,14 +232,9 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         bleAdvertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {
-            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-                runOnUiThread { 
-                    statusTextView.text = statusMsg
-                    Toast.makeText(this@MainActivity, "訊號發送中...", Toast.LENGTH_SHORT).show()
-                }
-            }
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {}
             override fun onStartFailure(errorCode: Int) {
-                runOnUiThread { statusTextView.text = "發送失敗: $errorCode" }
+                runOnUiThread { statusTextView.text = "廣播失敗: $errorCode" }
             }
         })
     }
@@ -241,6 +245,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacks(autoAttendanceRunnable)
         stopBleAdvertising()
     }
 
