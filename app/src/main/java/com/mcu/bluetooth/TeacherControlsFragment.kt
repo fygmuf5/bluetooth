@@ -85,6 +85,7 @@ class TeacherControlsFragment : Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_teacher_controls, container, false)
         
+        // 修正：對應新的 XML ID
         btnAttendanceToggle = view.findViewById(R.id.btn_attendance_toggle)
         exportCsvButton = view.findViewById(R.id.export_csv_button)
         devicesListView = view.findViewById(R.id.devices_listview)

@@ -1,6 +1,7 @@
 package com.mcu.bluetooth
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -26,6 +27,17 @@ class RoleSelectionActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // 自動登入檢查
+        val sharedPref = getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
+        val savedEmail = sharedPref.getString("saved_email", null)
+        val savedRole = sharedPref.getString("saved_role", null)
+        
+        if (savedEmail != null && savedRole != null) {
+            startMainActivity(savedRole, savedEmail)
+            return
+        }
+
         setContentView(R.layout.activity_role_selection)
 
         etUsername = findViewById(R.id.et_username)
@@ -61,7 +73,6 @@ class RoleSelectionActivity : AppCompatActivity() {
             val fullEmail = formatEmail(input)
             val deviceId = getUniqueDeviceId()
             
-            // 修正：傳入 deviceId 參數以符合 NetworkManager.login 的定義
             NetworkManager.login(fullEmail, password, deviceId) { success ->
                 runOnUiThread {
                     if (success) {
@@ -70,6 +81,13 @@ class RoleSelectionActivity : AppCompatActivity() {
                             "STUDENT"
                         } else {
                             "TEACHER"
+                        }
+                        
+                        // 儲存登入資訊以供下次自動登入
+                        sharedPref.edit().apply {
+                            putString("saved_email", fullEmail)
+                            putString("saved_role", role)
+                            apply()
                         }
                         
                         Toast.makeText(this, "登入成功！", Toast.LENGTH_SHORT).show()
@@ -98,9 +116,6 @@ class RoleSelectionActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 獲取設備唯一識別碼 (Android ID) 以驗證設備綁定
-     */
     @SuppressLint("HardwareIds")
     private fun getUniqueDeviceId(): String {
         return Settings.Secure.getString(this.contentResolver, Settings.Secure.ANDROID_ID) ?: "Unknown"

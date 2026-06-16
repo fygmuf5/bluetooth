@@ -77,7 +77,6 @@ class MainActivity : AppCompatActivity() {
         setupListeners()
 
         if (currentRole == "STUDENT") {
-            // 學生端進入後自動開始第一次點名流程
             checkAndStartAutoAttendance()
         }
     }
@@ -93,7 +92,6 @@ class MainActivity : AppCompatActivity() {
         dot1 = findViewById(R.id.dot1)
         dot2 = findViewById(R.id.dot2)
         
-        // 學生端的按鈕改為手動刷新，但主要是自動
         broadcastButton.text = "手動立即簽到"
     }
 
@@ -197,9 +195,19 @@ class MainActivity : AppCompatActivity() {
         popup.show()
     }
 
+    /**
+     * 優化後的登出功能：清除 SharedPreferences 中的登入紀錄
+     */
     private fun logout() {
+        // 停止背景任務與藍牙廣播
         handler.removeCallbacks(autoAttendanceRunnable)
         stopBleAdvertising()
+
+        // 清除自動登入紀錄
+        val sharedPref = getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
+        sharedPref.edit().clear().apply()
+
+        // 返回登入畫面並清空 Activity 棧
         val intent = Intent(this, RoleSelectionActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
