@@ -27,12 +27,13 @@ import com.google.android.material.tabs.TabLayout
 import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.atomic.AtomicInteger
 
 @SuppressLint("MissingPermission")
 class TeacherControlsFragment : Fragment() {
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    private val REFRESH_INTERVAL = 5 * 60 * 1000L
+    private val REFRESH_INTERVAL = 5 * 60 * 1000L // 老師端維持 5 分鐘刷新一次金鑰
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         (requireContext().getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
@@ -85,7 +86,6 @@ class TeacherControlsFragment : Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_teacher_controls, container, false)
         
-        // 修正：對應新的 XML ID
         btnAttendanceToggle = view.findViewById(R.id.btn_attendance_toggle)
         exportCsvButton = view.findViewById(R.id.export_csv_button)
         devicesListView = view.findViewById(R.id.devices_listview)
@@ -254,6 +254,8 @@ class TeacherControlsFragment : Fragment() {
         tvTeacherStatus.text = "正在回傳點名結果..."
         
         val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        
+        // 將手動勾選但未經藍牙感應的學生也加入紀錄
         allStudentsList.filter { it.isPresent }.forEach { student ->
             if (attendanceRecords.values.none { it.first == student.id }) {
                 attendanceRecords["Manual_${student.id}"] = Pair(student.id, timeNow)
@@ -265,13 +267,16 @@ class TeacherControlsFragment : Fragment() {
             return
         }
 
-        var count = 0
+        // 使用 AtomicInteger 確保執行緒安全 (修正點 2)
+        val completedCount = AtomicInteger(0)
+        val totalToUpload = attendanceRecords.size
+
         attendanceRecords.forEach { (address, pair) ->
-            NetworkManager.syncAttendance(pair.first, address) {
-                count++
-                if (count == attendanceRecords.size) {
+            NetworkManager.syncAttendance(pair.first, address) { success ->
+                val current = completedCount.incrementAndGet()
+                if (current == totalToUpload) {
                     activity?.runOnUiThread {
-                        tvTeacherStatus.text = "點名結束，已同步 $count 位學生"
+                        tvTeacherStatus.text = "點名結束，已同步 $totalToUpload 位學生"
                         Toast.makeText(requireContext(), "點名名單回傳完成", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -411,10 +416,10 @@ class TeacherControlsFragment : Fragment() {
         private fun updateItemVisual(holder: ViewHolder, isPresent: Boolean) {
             if (isPresent) {
                 holder.cardView.setBackgroundColor(Color.parseColor("#E8F5E9"))
-                holder.tvId.textColor(Color.parseColor("#2E7D32"))
+                holder.tvId.setTextColor(Color.parseColor("#2E7D32"))
             } else {
                 holder.cardView.setBackgroundColor(Color.WHITE)
-                holder.tvId.textColor(Color.parseColor("#333333"))
+                holder.tvId.setTextColor(Color.parseColor("#333333"))
             }
         }
 

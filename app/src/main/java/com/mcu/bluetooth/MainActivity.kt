@@ -26,11 +26,14 @@ import java.util.*
 class MainActivity : AppCompatActivity() {
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    private val AUTO_REFRESH_INTERVAL = 5 * 60 * 1000L // 5 分鐘自動刷新一次
+    private val AUTO_REFRESH_INTERVAL = 2 * 60 * 1000L // 縮短為 2 分鐘，確保比老師端快，增加同步成功率 (修正點 5)
 
     private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
     private val bluetoothAdapter: BluetoothAdapter? by lazy { bluetoothManager.adapter }
     private val bleAdvertiser: BluetoothLeAdvertiser? by lazy { bluetoothAdapter?.bluetoothLeAdvertiser }
+
+    // 儲存當前的廣播回呼，以便正確停止 (修正點 1)
+    private var currentAdvertiseCallback: AdvertiseCallback? = null
 
     private lateinit var statusTextView: TextView
     private lateinit var studentIdTextView: TextView
@@ -156,6 +159,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startAutomaticAttendance() {
+        // 檢查硬體支援 (修正點 3)
+        if (bluetoothAdapter?.isMultipleAdvertisementSupported == false) {
+            statusTextView.text = "狀態: 裝置不支援藍牙廣播點名"
+            Toast.makeText(this, "您的手機不支援 BLE 廣播功能", Toast.LENGTH_LONG).show()
+            return
+        }
+
         if (studentId.isEmpty() || studentId == "Unknown") return
 
         val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
@@ -195,19 +205,13 @@ class MainActivity : AppCompatActivity() {
         popup.show()
     }
 
-    /**
-     * 優化後的登出功能：清除 SharedPreferences 中的登入紀錄
-     */
     private fun logout() {
-        // 停止背景任務與藍牙廣播
         handler.removeCallbacks(autoAttendanceRunnable)
         stopBleAdvertising()
 
-        // 清除自動登入紀錄
         val sharedPref = getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
         sharedPref.edit().clear().apply()
 
-        // 返回登入畫面並清空 Activity 棧
         val intent = Intent(this, RoleSelectionActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
@@ -230,6 +234,7 @@ class MainActivity : AppCompatActivity() {
         if (dataBytes.size > 26) return
 
         stopBleAdvertising()
+        
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(false)
@@ -239,16 +244,27 @@ class MainActivity : AppCompatActivity() {
             .addServiceData(ParcelUuid(SERVICE_UUID), dataBytes)
             .build()
 
-        bleAdvertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {
-            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {}
+        currentAdvertiseCallback = object : AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+                super.onStartSuccess(settingsInEffect)
+            }
             override fun onStartFailure(errorCode: Int) {
                 runOnUiThread { statusTextView.text = "廣播失敗: $errorCode" }
             }
-        })
+        }
+
+        bleAdvertiser?.startAdvertising(settings, data, currentAdvertiseCallback)
     }
 
     private fun stopBleAdvertising() {
-        try { bleAdvertiser?.stopAdvertising(object : AdvertiseCallback(){}) } catch(e: Exception){}
+        try {
+            currentAdvertiseCallback?.let {
+                bleAdvertiser?.stopAdvertising(it)
+                currentAdvertiseCallback = null
+            }
+        } catch(e: Exception){
+            e.printStackTrace()
+        }
     }
 
     override fun onDestroy() {
