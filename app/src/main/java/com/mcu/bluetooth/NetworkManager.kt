@@ -61,13 +61,29 @@ object NetworkManager {
         }
     }
 
-    fun login(email: String, password: String, deviceId: String, callback: (Boolean) -> Unit) {
+    /**
+     * 強化後的登入邏輯 (修正點 2)
+     */
+    fun login(email: String, password: String, deviceId: String, callback: (Boolean, String?) -> Unit) {
         val json = JSONObject().apply {
             put("email", email)
             put("password", password)
             put("device_id", deviceId)
         }
-        sendJsonPost(BASE_URL + PATH_LOGIN, json, callback)
+        
+        sendJsonPostWithResponse(BASE_URL + PATH_LOGIN, json) { response ->
+            if (response != null) {
+                // 寬鬆判定：有 success=true OR 有 token 欄位 OR status="success" 都算成功
+                val success = response.optBoolean("success", false) || 
+                             response.has("token") || 
+                             response.optString("status") == "success"
+                
+                val message = response.optString("message", if (success) "登入成功" else "帳號或密碼錯誤")
+                callback(success, message)
+            } else {
+                callback(false, "網路連線異常，請確認後端網址")
+            }
+        }
     }
 
     fun registerUser(email: String, password: String, verifyCode: String, deviceId: String, callback: (Boolean, String?) -> Unit) {

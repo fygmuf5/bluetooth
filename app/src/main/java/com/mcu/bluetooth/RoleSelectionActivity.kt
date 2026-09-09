@@ -28,7 +28,6 @@ class RoleSelectionActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 自動登入檢查
         val sharedPref = getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
         val savedEmail = sharedPref.getString("saved_email", null)
         val savedRole = sharedPref.getString("saved_role", null)
@@ -73,7 +72,8 @@ class RoleSelectionActivity : AppCompatActivity() {
             val fullEmail = formatEmail(input)
             val deviceId = getUniqueDeviceId()
             
-            NetworkManager.login(fullEmail, password, deviceId) { success ->
+            // 使用修正後的 login API
+            NetworkManager.login(fullEmail, password, deviceId) { success, message ->
                 runOnUiThread {
                     if (success) {
                         val localPart = fullEmail.substringBefore("@")
@@ -83,33 +83,31 @@ class RoleSelectionActivity : AppCompatActivity() {
                             "TEACHER"
                         }
                         
-                        // 儲存登入資訊以供下次自動登入
-                        sharedPref.edit().apply {
-                            putString("saved_email", fullEmail)
-                            putString("saved_role", role)
-                            apply()
-                        }
+                        sharedPref.edit().putString("saved_email", fullEmail)
+                                        .putString("saved_role", role)
+                                        .apply()
                         
                         Toast.makeText(this, "登入成功！", Toast.LENGTH_SHORT).show()
                         startMainActivity(role, fullEmail)
                     } else {
-                        Toast.makeText(this, "登入失敗：帳號、密碼錯誤或設備未綁定", Toast.LENGTH_LONG).show()
+                        // 顯示伺服器回傳的具體訊息 (例如：設備未綁定)
+                        Toast.makeText(this, message ?: "登入失敗", Toast.LENGTH_LONG).show()
                     }
                 }
             }
         }
 
         tvRegister.setOnClickListener {
-            val intent = Intent(this, RegisterActivity::class.java)
-            startActivity(intent)
+            startActivity(Intent(this, RegisterActivity::class.java))
         }
 
         tvForgotPassword.setOnClickListener {
             Toast.makeText(this, "請聯繫管理員", Toast.LENGTH_SHORT).show()
         }
 
+        // 測試用按鈕 (保持原樣)
         findViewById<Button>(R.id.teacher_button).setOnClickListener { 
-            startMainActivity("TEACHER", "test_teacher@gmail.com") 
+            startMainActivity("TEACHER", "test_teacher@mail.mcu.edu.tw") 
         }
         findViewById<Button>(R.id.student_button).setOnClickListener { 
             startMainActivity("STUDENT", "11012345@me.mcu.edu.tw") 
@@ -121,12 +119,13 @@ class RoleSelectionActivity : AppCompatActivity() {
         return Settings.Secure.getString(this.contentResolver, Settings.Secure.ANDROID_ID) ?: "Unknown"
     }
 
+    // 修正：與 RegisterActivity.kt 保持一致，老師使用 @mail.mcu.edu.tw
     private fun formatEmail(input: String): String {
         if (input.contains("@")) return input
         return if (input.length == 8 && input.all { it.isDigit() }) {
             "$input@me.mcu.edu.tw"
         } else {
-            "$input@gmail.com"
+            "$input@mail.mcu.edu.tw"
         }
     }
 
