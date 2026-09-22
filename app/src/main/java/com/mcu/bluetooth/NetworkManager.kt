@@ -30,6 +30,11 @@ object NetworkManager {
     private const val PATH_GET_OTP_LIST  = "/api/session/otp-list"
     private const val PATH_GET_MY_TOKEN  = "/api/session/get-token"
 
+    // 定位相關 API 路徑
+    private const val PATH_UPLOAD_COORDS = "/api/coords"
+    private const val PATH_GET_COORDS    = "/api/coords/get"
+    private const val PATH_CLEAR_COORDS  = "/api/coords/clear"
+
     private const val TIMEOUT_MS = 5000
     
     // 使用執行緒池管理網路請求，避免同時發送大量請求時造成系統壓力
@@ -126,6 +131,72 @@ object NetworkManager {
             put("device_address", address)
         }
         sendJsonPost(BASE_URL + PATH_ATTENDANCE, json, callback)
+    }
+
+    /**
+     * 2.1 定位計算程式：上傳座標 (定位計算 -> Node)
+     */
+    fun uploadCoordinates(
+        sessionId: String,
+        studentId: String,
+        x: Number,
+        y: Number,
+        coordinateSystem: String = "grid32",
+        timestamp: String,
+        callback: (Boolean) -> Unit
+    ) {
+        val json = JSONObject().apply {
+            put("session_id", sessionId)
+            put("student_id", studentId)
+            put("x", x)
+            put("y", y)
+            put("coordinate_system", coordinateSystem)
+            put("timestamp", timestamp)
+        }
+        sendJsonPostWithResponse(BASE_URL + PATH_UPLOAD_COORDS, json) { response ->
+            callback(response != null && (response.optBoolean("accepted", false) || response.optString("status") == "ok"))
+        }
+    }
+
+    /**
+     * 2.2 App：取得本次點名所有學生座標 (App -> Node)
+     */
+    fun getStudentCoordinates(
+        email: String,
+        password: String,
+        sessionId: String,
+        callback: (JSONObject?) -> Unit
+    ) {
+        val json = JSONObject().apply {
+            put("email", email)
+            put("password", password)
+            put("session_id", sessionId)
+        }
+        sendJsonPostWithResponse(BASE_URL + PATH_GET_COORDS, json, callback)
+    }
+
+    /**
+     * 2.4 老師：清除本次定位資料
+     */
+    fun clearCoordinates(
+        email: String,
+        password: String,
+        sessionId: String,
+        callback: (Boolean, Int) -> Unit
+    ) {
+        val json = JSONObject().apply {
+            put("email", email)
+            put("password", password)
+            put("session_id", sessionId)
+        }
+        sendJsonPostWithResponse(BASE_URL + PATH_CLEAR_COORDS, json) { response ->
+            if (response != null && response.optString("status") == "ok") {
+                val clearedCount = response.optInt("cleared", 0)
+                callback(true, clearedCount)
+            } else {
+                callback(false, 0)
+            }
+        }
     }
 
     private fun sendJsonPost(urlStr: String, jsonBody: JSONObject, callback: (Boolean) -> Unit) {

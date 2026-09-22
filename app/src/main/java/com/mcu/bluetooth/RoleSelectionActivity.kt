@@ -83,14 +83,15 @@ class RoleSelectionActivity : AppCompatActivity() {
                             "TEACHER"
                         }
                         
+                        // 同步儲存密碼，以便後續調用座標 API 驗證身分
                         sharedPref.edit().putString("saved_email", fullEmail)
                                         .putString("saved_role", role)
+                                        .putString("saved_password", password)
                                         .apply()
                         
                         Toast.makeText(this, "登入成功！", Toast.LENGTH_SHORT).show()
                         startMainActivity(role, fullEmail)
                     } else {
-                        // 顯示伺服器回傳的具體訊息 (例如：設備未綁定)
                         Toast.makeText(this, message ?: "登入失敗", Toast.LENGTH_LONG).show()
                     }
                 }
@@ -105,11 +106,13 @@ class RoleSelectionActivity : AppCompatActivity() {
             Toast.makeText(this, "請聯繫管理員", Toast.LENGTH_SHORT).show()
         }
 
-        // 測試用按鈕 (保持原樣)
+        // 測試用按鈕
         findViewById<Button>(R.id.teacher_button).setOnClickListener { 
+            sharedPref.edit().putString("saved_password", "teacher_pass").apply()
             startMainActivity("TEACHER", "test_teacher@mail.mcu.edu.tw") 
         }
         findViewById<Button>(R.id.student_button).setOnClickListener { 
+            sharedPref.edit().putString("saved_password", "student_pass").apply()
             startMainActivity("STUDENT", "11012345@me.mcu.edu.tw") 
         }
     }
@@ -119,7 +122,6 @@ class RoleSelectionActivity : AppCompatActivity() {
         return Settings.Secure.getString(this.contentResolver, Settings.Secure.ANDROID_ID) ?: "Unknown"
     }
 
-    // 修正：與 RegisterActivity.kt 保持一致，老師使用 @mail.mcu.edu.tw
     private fun formatEmail(input: String): String {
         if (input.contains("@")) return input
         return if (input.length == 8 && input.all { it.isDigit() }) {
