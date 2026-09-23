@@ -63,6 +63,7 @@ class TeacherControlsFragment : Fragment() {
     private var currentXorKey: String? = null
     private var otpVerifyList: Map<String, String>? = null
     private var isScanning = false
+    private var currentSessionId: String = ""
 
     private val handler = Handler(Looper.getMainLooper())
     private val refreshRunnable = object : Runnable {
@@ -196,6 +197,9 @@ class TeacherControlsFragment : Fragment() {
         btnAttendanceToggle.text = "停止並回傳"
         btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#F44336"))
         
+        // 生成本次點名的 session_id 供定位模組共用
+        currentSessionId = "sess_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+        
         attendanceResults.clear()
         attendanceRecords.clear()
         
@@ -251,7 +255,7 @@ class TeacherControlsFragment : Fragment() {
         btnAttendanceToggle.text = "開始點名"
         btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#4CAF50"))
         
-        tvTeacherStatus.text = "正在回傳點名結果..."
+        tvTeacherStatus.text = "正在回傳點名結果並清除定位暫存..."
         
         val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         
@@ -262,12 +266,20 @@ class TeacherControlsFragment : Fragment() {
             }
         }
 
+        val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
+        // 安全考量：此處密碼在實際正式發行時應透過安全存儲取得，目前帶入預設以便與後端 Node 對接
+        val password = "teacherPassword" 
+
+        // 呼叫 2.4 API：清除本次定位緩衝暫存，防止新舊點名資料重疊衝突
+        NetworkManager.clearCoordinates(email, password, currentSessionId) { success, clearedCount ->
+            Log.d("TeacherControls", "定位資料清除狀態: $success, 共清除 $clearedCount 筆學生座標")
+        }
+
         if (attendanceRecords.isEmpty()) {
             tvTeacherStatus.text = "點名結束 (無紀錄)"
             return
         }
 
-        // 使用 AtomicInteger 確保執行緒安全 (修正點 2)
         val completedCount = AtomicInteger(0)
         val totalToUpload = attendanceRecords.size
 
@@ -422,8 +434,6 @@ class TeacherControlsFragment : Fragment() {
                 holder.tvId.setTextColor(Color.parseColor("#333333"))
             }
         }
-
-        private fun TextView.textColor(color: Int) = setTextColor(color)
 
         override fun getItemCount() = students.size
     }

@@ -14,14 +14,13 @@ import java.util.concurrent.Executors
  * 優化後的 NetworkManager
  * 1. 使用固定執行緒池 (Fixed Thread Pool) 避免頻繁創建執行緒
  * 2. 強化錯誤處理與日誌紀錄
- * 3. 確保回傳邏輯一致
+ * 3. 確保回傳邏輯一致，修正 Kotlin 型態安全警示
  */
 object NetworkManager {
 
     private const val BASE_URL = "https://micronemous-indefeasibly-cooper.ngrok-free.dev"
 
     private const val PATH_ATTENDANCE   = "/api/check-in"
-    private const val PATH_USER_INFO    = "/api/my-courses"
     private const val PATH_VERIFY_CODE  = "/api/send-code"
     private const val PATH_REGISTER     = "/api/register"
     private const val PATH_LOGIN        = "/api/auth/login"
@@ -43,7 +42,8 @@ object NetworkManager {
     fun startAttendanceSession(email: String, callback: (String?) -> Unit) {
         val json = JSONObject().apply { put("email", email) }
         sendJsonPostWithResponse(BASE_URL + PATH_START_SESSION, json) { response ->
-            callback(response?.optString("xor_key", null))
+            val xorKey = if (response != null && response.has("xor_key")) response.optString("xor_key", "") else null
+            callback(xorKey)
         }
     }
 
@@ -55,20 +55,19 @@ object NetworkManager {
             data?.keys()?.forEach { studentId ->
                 otpMap[studentId] = data.getString(studentId)
             }
-            callback(if (otpMap.isEmpty()) null else otpMap)
+            callback(otpMap.ifEmpty { null })
         }
     }
 
     fun getStudentToken(studentId: String, callback: (otp: String?, xorKey: String?) -> Unit) {
         val json = JSONObject().apply { put("student_id", studentId) }
         sendJsonPostWithResponse(BASE_URL + PATH_GET_MY_TOKEN, json) { response ->
-            callback(response?.optString("otp", null), response?.optString("xor_key", null))
+            val otp = if (response != null && response.has("otp")) response.optString("otp", "") else null
+            val xorKey = if (response != null && response.has("xor_key")) response.optString("xor_key", "") else null
+            callback(otp, xorKey)
         }
     }
 
-    /**
-     * 強化後的登入邏輯 (修正點 2)
-     */
     fun login(email: String, password: String, deviceId: String, callback: (Boolean, String?) -> Unit) {
         val json = JSONObject().apply {
             put("email", email)
@@ -78,10 +77,9 @@ object NetworkManager {
         
         sendJsonPostWithResponse(BASE_URL + PATH_LOGIN, json) { response ->
             if (response != null) {
-                // 寬鬆判定：有 success=true OR 有 token 欄位 OR status="success" 都算成功
                 val success = response.optBoolean("success", false) || 
                              response.has("token") || 
-                             response.optString("status") == "success"
+                             response.optString("status", "") == "success"
                 
                 val message = response.optString("message", if (success) "登入成功" else "帳號或密碼錯誤")
                 callback(success, message)
@@ -117,7 +115,7 @@ object NetworkManager {
         sendJsonPostWithResponse(BASE_URL + PATH_VERIFY_CODE, json) { response ->
             if (response != null) {
                 val success = response.optBoolean("success", false)
-                val message = response.optString("message", null)
+                val message = if (response.has("message")) response.optString("message", "") else null
                 callback(success, message)
             } else {
                 callback(false, "連線失敗")
@@ -154,7 +152,7 @@ object NetworkManager {
             put("timestamp", timestamp)
         }
         sendJsonPostWithResponse(BASE_URL + PATH_UPLOAD_COORDS, json) { response ->
-            callback(response != null && (response.optBoolean("accepted", false) || response.optString("status") == "ok"))
+            callback(response != null && (response.optBoolean("accepted", false) || response.optString("status", "") == "ok"))
         }
     }
 
@@ -190,7 +188,7 @@ object NetworkManager {
             put("session_id", sessionId)
         }
         sendJsonPostWithResponse(BASE_URL + PATH_CLEAR_COORDS, json) { response ->
-            if (response != null && response.optString("status") == "ok") {
+            if (response != null && response.optString("status", "") == "ok") {
                 val clearedCount = response.optInt("cleared", 0)
                 callback(true, clearedCount)
             } else {
@@ -235,7 +233,7 @@ object NetworkManager {
                     try {
                         callback(JSONObject(responseStr))
                     } catch (e: Exception) {
-                        Log.e("NetworkManager", "JSON Parse Error at $urlStr: $responseStr")
+                        Log.e("NetworkManager", "JSON Parse Error at $urlStr: $responseStr", e)
                         callback(null)
                     }
                 } else {
@@ -243,7 +241,7 @@ object NetworkManager {
                     callback(null)
                 }
             } catch (e: Exception) {
-                Log.e("NetworkManager", "Network Error at $urlStr: ${e.message}")
+                Log.e("NetworkManager", "Network Error at $urlStr: ${e.message}", e)
                 callback(null)
             } finally {
                 conn?.disconnect()
