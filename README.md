@@ -1,392 +1,218 @@
-# 藍牙點名系統 (MCU Bluetooth Attendance System)
+# MCU Bluetooth Attendance System
 
-## 📋 項目概述
+這是一個基於 Android + BLE（Bluetooth Low Energy）的課堂點名系統，分為學生端與教師端兩種角色。學生端會在點名期間透過藍牙廣播加密後的簽到資料，教師端則會掃描並驗證資料，最後同步出席紀錄與座標資訊到後端。
 
-這是一個基於 **Bluetooth Low Energy (BLE)** 技術的課堂點名系統，專為大學課堂設計。系統採用雙角色架構：
-- **教師端**：發送掃描信號、記錄學生點名、導出出席紀錄
-- **學生端**：廣播身份信息、自動簽到
+## 專案簡介
 
-本項目為大學專題研究，仍在開發中。
+本專案主要用於大學課堂場景，提供以下核心能力：
 
----
+- 學生登入與帳號註冊
+- 點名流程中的 OTP / XOR 金鑰驗證
+- BLE 廣播與掃描
+- 教師端出席統計與 CSV 匯出
+- 教室定位熱圖與座標查詢
+- 和後端 API 互動以完成登入、點名、座標同步
 
-## 🎯 核心功能
+## 目前功能
 
-### 🧑‍🏫 教師功能
-- **學生掃描**：實時掃描周圍學生藍牙設備
-- **熱力圖展示**：可視化顯示教室內學生位置分佈
-- **出席記錄**：自動記錄學生簽到時間和設備信息
-- **導出 CSV**：將出席紀錄導出為 Excel 可讀的 CSV 格式
-- **回到選擇界面**：支持切換教師/學生身份
+### 學生端
 
-### 👨‍🎓 學生功能
-- **自動廣播**：輸入學號/姓名後自動通過藍牙廣播身份信息
-- **安全驗證**：採用時間窗口 + Hash驗證機制防止欺騙
-- **保存信息**：自動保存最後輸入的學號/姓名（下次使用自動帶入）
-- **熱力圖查看**：查看自己在教室內的相對位置
+- 登入系統
+- 註冊帳號（含驗證碼流程）
+- 判斷學生/教師帳號類型
+- 自動取得點名 token
+- 使用 BLE 廣播加密後的 `student_id|otp` 資料
+- 支援手動立即簽到
+- 支援自動重複點名（背景循環）
+- 需要 Bluetooth 權限才能正常廣播
 
-### 🗺️ 熱力圖功能
-- **實時位置追蹤**：基於信號強度 (RSSI) 估算設備距離
-- **卡爾曼濾波**：平滑化信號噪聲，提高定位精度
-- **自動過期清理**：10 秒無信號自動移除該設備
-- **學生計數**：顯示當前在線學生數
+### 教師端
 
----
+- 啟動點名工作階段
+- 從後端取得當次點名的 XOR key 和 OTP 名單
+- 掃描 BLE 廣播資料並解密驗證
+- 檢查學生是否有效簽到
+- 顯示即時簽到結果
+- 支援搜尋、全選、逐筆勾選學生
+- 結束點名後同步出席結果到後端
+- 匯出 CSV 至下載資料夾
 
-## 🏗️ 項目架構
+### 定位與熱圖
 
-```
+- 由教師端輪詢學生座標資料
+- 顯示 8×10 公尺教室網格
+- 顯示三個 Raspberry Pi 接收端位置
+- 視覺化呈現學生位置
+- 紀錄已定位與待掃描學生數量
+
+## 專案架構
+
+```text
 bluetooth/
 ├── app/
-│   ├── src/
-│   │   ├── main/
-│   │   │   ├── java/com/mcu/bluetooth/
-│   │   │   │   ├── MainActivity.kt           # 主要界面（教師/學生通用）
-│   │   │   │   ├── RoleSelectionActivity.kt  # 角色選擇界面
-│   │   │   │   ├── HeatmapActivity.kt        # 熱力圖界面
-│   │   │   │   ├── HeatmapView.kt            # 熱力圖繪製組件
-│   │   │   │   └── KalmanFilter.kt           # 卡爾曼濾波器
-│   │   │   └── res/
-│   │   │       ├── layout/                   # UI 布局文件
-│   │   │       └── values/                   # 資源常數
-│   │   ├── test/
-│   │   │   └── java/                         # 單元測試
-│   │   └── androidTest/
-│   │       └── java/                         # 集成測試
-│   └── build.gradle.kts                      # 項目依賴配置
-├── build.gradle.kts                          # 根項目配置
-└── settings.gradle.kts                       # Gradle 設置
+│   ├── src/main/java/com/mcu/bluetooth/
+│   │   ├── RoleSelectionActivity.kt      # 登入與角色入口
+│   │   ├── RegisterActivity.kt            # 註冊與驗證碼流程
+│   │   ├── MainActivity.kt                # 主畫面，依角色切換學生/教師
+│   │   ├── TeacherControlsFragment.kt     # 教師點名控制、BLE 掃描、CSV 輸出
+│   │   ├── HeatmapFragment.kt             # 定位資料輪詢與更新熱圖
+│   │   ├── HeatmapView.kt                 # 教室熱圖繪製
+│   │   ├── NetworkManager.kt              # 通訊層，管理所有後端 API
+│   │   ├── KalmanFilter.kt                # 簡單 RSSI 濾波器（目前未接入主要流程）
+│   │   └── ...
+│   ├── src/main/res/
+│   │   ├── layout/                        # XML 介面與元件布局
+│   │   ├── values/                        # 顏色、字串、主題等資源
+│   │   └── xml/                           # backup / data extraction 設定
+│   └── src/main/AndroidManifest.xml       # 權限與 Activity 註冊
+├── gradle/
+│   └── libs.versions.toml                 # Gradle 依賴版本設定
+├── build.gradle.kts                       # Root Gradle 設定
+├── settings.gradle.kts                    # 專案模組設定
+├── gradle.properties                      # Gradle 全域設定
+├── gradlew / gradlew.bat                  # Gradle Wrapper
+├── README.md
+└── .gitignore
 ```
 
-### 核心類說明
+## 技術棧
 
-| 類名 | 職責 | 備註 |
-|------|------|------|
-| **MainActivity** | 主要邏輯，負責藍牙掃描/廣播、消息處理 | ~400 行代碼 |
-| **RoleSelectionActivity** | 用戶角色選擇界面 | 簡單的路由 |
-| **HeatmapActivity** | 熱力圖展示界面邏輯 | 掃描 + 位置更新 |
-| **HeatmapView** | 自定義 View，繪製熱力圖 | Canvas 繪圖 |
-| **KalmanFilter** | 卡爾曼濾波器實現 | 平滑 RSSI 數據 |
+- 語言：Kotlin
+- 平台：Android
+- 構建工具：Gradle Kotlin DSL
+- UI：AndroidX、Material Components、ConstraintLayout
+- 通訊：BLE API、HTTP POST / JSON
+- 後端互動：`NetworkManager.kt` 透過 `HttpURLConnection` 呼叫 API
 
----
+## 版本與環境需求
 
-## 🛠️ 技術棧
+- Android Studio
+- Android SDK 36
+- JDK 11
+- 最低支援版本：API 31（Android 12）
+- 測試裝置：實體 Android 裝置或模擬器
 
-- **語言**：Kotlin 100%
-- **最低 Android 版本**：API 21 (Android 5.0)
-- **藍牙技術**：BLE (Bluetooth Low Energy)
-- **安全機制**：時間窗口 + SHA-1 Hash
-- **構建工具**：Gradle with Kotlin DSL
+## 權限說明
 
-### 關鍵依賴
-- AndroidX AppCompat
-- ConstraintLayout
-- Android Bluetooth API
+App 會在執行時要求以下權限：
 
----
+- `INTERNET`
+- `BLUETOOTH`
+- `BLUETOOTH_ADMIN`
+- `BLUETOOTH_SCAN`
+- `BLUETOOTH_CONNECT`
+- `BLUETOOTH_ADVERTISE`
+- `ACCESS_FINE_LOCATION`
 
-## 🚀 快速開始
+這些權限主要用於：
 
-### 環境要求
-- Android Studio Arctic Fox (2020.3.1) 或更新版本
-- Kotlin 插件 1.5.0+
-- 目標 Android 設備 API 21+
+- 藍牙掃描與廣播
+- 進行點名驗證
+- 讀取裝置資訊和定位所需資料
 
-### 安裝步驟
+## 快速開始
 
-1. **Clone項目**
+### 1. Clone 專案
+
 ```bash
 git clone https://github.com/fygmuf5/bluetooth.git
 cd bluetooth
 ```
 
-2. **用 Android Studio 打開**
-```bash
-# 方法 1：直接打開項目文件夾
-# Android Studio → Open → 選擇 bluetooth 文件夾
+### 2. 建置專案
 
-# 方法 2：命令行構建
+```bash
 ./gradlew assembleDebug
 ```
 
-3. **安裝到設備**
+### 3. 安裝到裝置
+
 ```bash
 ./gradlew installDebug
 ```
 
-4. **運行應用**
-- 在 Android Studio 中點擊 "Run" 或使用命令：
-```bash
-./gradlew runDebug
-```
+### 4. 啟動 App
 
----
+可直接使用 Android Studio 打開專案後點選 Run，或在命令列執行 App 安裝流程。
 
-## 📱 APP使用指南
+## 測試
 
-### 教師端使用流程
-
-#### 1️⃣ **啟動應用**
-- 打開應用後選擇 **"教師"** 按鈕
-- 等待藍牙初始化完成
-
-#### 2️⃣ **掃描學生**
-- 打開 **"掃描切換開關"**（SCAN 按鈕）
-- 應用開始掃描周圍藍牙設備
-- 已簽到學生列表自動更新
-
-#### 3️⃣ **查看熱力圖**
-- 點擊 **"查看熱力圖"** 按鈕
-- 可視化看到教室內學生位置分佈
-- 實時更新學生人數和位置
-
-#### 4️⃣ **導出出席紀錄**
-- 點擊 **"導出 CSV"** 按鈕
-- 自動生成格式：`點名紀錄_YYYYMMDD_HHmm.csv`
-- 文件保存到手機下載文件夾
-
-#### 5️⃣ **返回角色選擇**
-- 點擊 **"回到選擇身分"** 按鈕
-- 返回到初始角色選擇界面
-
-### 學生端使用流程
-
-#### 1️⃣ **啟動應用**
-- 打開應用後選擇 **"學生"** 按鈕
-
-#### 2️⃣ **輸入身份信息**
-- 在文本框中輸入 **學號 + 姓名**（如：`12345678ＯＯＯ`）
-- 信息會自動保存到本地存儲
-- 下次使用時自動帶入
-
-#### 3️⃣ **點名簽到**
-- 點擊 **"廣播"** 按鈕
-- 應用開始通過藍牙廣播身份信息
-- 等待教師端掃描確認
-
-#### 4️⃣ **查看位置**
-- 點擊 **"查看熱力圖"** 按鈕
-- 查看自己在教室的相對位置
-
----
-
-## 🔐 安全機制
-
-### 防欺騙驗證
-應用採用多層安全機制：
-
-1. **時間窗口驗證**（30 秒）
-   - 只接受 30 秒內的簽到信息
-   - 防止過期的重放攻擊
-
-2. **滾動Hash**
-   - 使用 SHA-1 Hash + 秘鑰驗證信息完整性
-   - 每個時間周期生成不同的Hash
-
-3. **XOR 加密**
-   - 學號/姓名信息通過簡單 XOR 變換加密
-   - 防止明文傳輸被截獲
-
-**代碼位置**：`MainActivity.kt` - `generateRollingHash()` 和 `xorTransform()` 方法
-
----
-
-## 📊 數據格式
-
-### CSV 導出格式
-```csv
-學號/姓名,設備地址,最後更新時間
-1091234 王小明,AA:BB:CC:DD:EE:FF,2024-03-01 14:30:45
-1091235 李小華,11:22:33:44:55:66,2024-03-01 14:31:10
-```
-
-### 藍牙廣播信息結構
-```
-┌─────────────────────────────────────────┐
-│ Hash部分 (6 字節)  │ 加密部分 (可變長度) │
-│ (SHA-1 摘要)      │ (XOR 加密學號姓名) │
-└─────────────────────────────────────────┘
-Total Size: ≤ 24 字節
-```
-
----
-
-## 🐛 已知限制與待改進
-
-### 當前限制
-- ✅ BLE 掃描範圍受硬體限制（通常 30-100 米）
-- ✅ RSSI 信號強度易受環境干擾，位置估算誤差較大
-- ✅ 不支持多個教室同時使用（需要通過 SERVICE_UUID 區分）
-- ✅ CSV 只支持本地文件，無雲同步
-
-### 未來改進方向
-- [ ] 支持自定義 SERVICE_UUID（多個教室）
-- [ ] 優化卡爾曼濾波參數自適應
-- [ ] 增加 UI 設計美化
-- [ ] 支持 UI 多語言（目前中文）
-- [ ] 添加更多詳細的位置估算算法
-- [ ] 實現教師端數據上傳雲存儲
-- [ ] 齁端前端整合功能
-
----
-
-## 📋 權限說明
-
-### 所需權限
-
-| 權限 | 用途 | Android 版本 |
-|------|------|-----------|
-| `BLUETOOTH_SCAN` | 掃描藍牙設備 | API 31+ |
-| `BLUETOOTH_ADVERTISE` | 廣播身份信息 | API 31+ |
-| `BLUETOOTH_CONNECT` | 連接藍牙設備 | API 31+ |
-| `BLUETOOTH` | 藍牙基本功能 | API 21-30 |
-| `BLUETOOTH_ADMIN` | 藍牙管理功能 | API 21-30 |
-| `ACCESS_FINE_LOCATION` | 精確位置（BLE 掃描需要）| API 21-30 |
-
-> **注意**：應用會在首次運行時請求權限，所有功能都需要用戶同意才能使用
-
----
-
-## 🧪 測試指南
-
-### 單元測試
 ```bash
 ./gradlew testDebugUnitTest
-```
-
-### 集成測試（需真實設備）
-```bash
 ./gradlew connectedAndroidTest
 ```
 
-### 手動測試建議
-1. **準備**：至少 2 台 Android 設備(約多越好)
-2. **教師端設備**：打開應用 → 選擇"教師" → 打開掃描
-3. **學生端設備**：打開應用 → 選擇"學生" → 輸入學號 → 點擊廣播
-4. **驗證**：教師端應立即顯示簽到信息
+## 主要 API 依賴
 
----
+目前 `NetworkManager.kt` 直接呼叫後端 API，包含：
 
-## 📁 文件說明
+- 登入：`/api/auth/login`
+- 發送註冊驗證碼：`/api/send-code`
+- 註冊：`/api/register`
+- 開始點名：`/api/session/start`
+- 取得 OTP 名單：`/api/session/otp-list`
+- 取得學生 token：`/api/session/get-token`
+- 回傳點名結果：`/api/check-in`
+- 上傳座標：`/api/coords`
+- 取得座標：`/api/coords/get`
+- 清除座標：`/api/coords/clear`
 
-### 配置文件
-- **`build.gradle.kts`**（根）：項目級構建配置
-- **`app/build.gradle.kts`**：應用級依賴和編譯選項
-- **`gradle.properties`**：Gradle 全局屬性
-- **`settings.gradle.kts`**：Gradle 設置和模塊配置
+注意：這些 API 需要後端服務是可用的，否則 App 無法正常進行登入與點名。
 
-### 資源文件
-- **`res/layout/`**：UI 布局文件（XML）
-- **`res/values/`**：字符串、顏色、尺寸等資源
+## 目前已知限制
 
----
+- App 的功能高度依賴後端 API，後端不可用時無法正常登入、點名與定位。
+- 定位熱圖是基於後端回傳座標，而不是純本地計算 RSSI。
+- `查詢紀錄` 選單目前只顯示開發中的提示，尚未完整實作。
+- `KalmanFilter` 已存在，但目前沒有在主要流程中接上真正的 RSSI 定位計算。
+- 目前沒有正式的 `LICENSE` 檔案。
+- 某些開發測試入口（例如測試用教師／學生快速進入）仍可能存在，需要在正式發布前確認是否移除。
 
-## 🤝 團隊協作指南
+## 目前程式流程
 
-### 代碼風格
-- 使用 **Kotlin 官方風格指南**
-- 變量名使用駝峰命名法
-- 類名使用帕斯卡命名法
-- 添加有意義的代碼註釋（特別是複雜邏輯）
+```text
+RoleSelectionActivity
+    ├── 登入
+    ├── 註冊
+    └── 自動進入 MainActivity
 
-### 分支管理
-```bash
-# 創建功能分支
-git checkout -b feature/your-feature-name
+MainActivity
+    ├── 學生端：取得 token → XOR 加密 → BLE 廣播
+    └── 教師端：TeacherControlsFragment + HeatmapFragment
 
-# 開發完成後提交 PR
-# PR 說明要包含：
-# 1. 修改內容簡述
-# 2. 涉及的類和方法
-# 3. 測試情況說明
+TeacherControlsFragment
+    ├── 藍牙掃描
+    ├── 解密/驗證 OTP
+    ├── 出席統計
+    ├── CSV 匯出
+    └── 回傳結果到後端
+
+HeatmapFragment
+    └── 輪詢座標並顯示熱圖
 ```
 
-### 常見開發任務
+## 專案用途
 
-#### 添加新功能
-1. 在 `MainActivity.kt` 中新增方法
-2. 添加對應的 UI 控件到布局文件
-3. 在 `setupListeners()` 中連接事件監聽
-4. 測試並添加代碼註釋
+本專案適合在以下情境中使用：
 
-#### 修改藍牙通信
-1. 修改 `SERVICE_UUID` 以支持多個教室
-2. 更新掃描回調 `scanCallback`
-3. 測試信號掃描和廣播功能
+- 大學課堂點名
+- 需要低功耗藍牙簽到的場景
+- 需要教師端即時統計與定位的教室環境
 
-#### 優化位置估算
-1. 修改 `HeatmapActivity.kt` 中的距離計算
-2. 調整 `KalmanFilter` 的參數
-3. 在 `HeatmapView.kt` 更新繪製邏輯
+## 備註
 
----
+- 本倉庫目前以 Android Kotlin 專案為主，核心邏輯集中在 `app/src/main/java/com/mcu/bluetooth/`。
+- 若要正式部署，建議再補齊後端環境、正式登入流程、安全儲存與授權條款。
 
-## 📞 常見問題 (FAQ)
+## 貢獻
 
-### Q1: 應用無法掃描到學生設備？
-**A:**
-- 檢查學生端是否已點擊"廣播"按鈕
-- 確認教師端已打開掃描開關
-- 檢查藍牙是否開啟且有足夠電量
-- 試試重新啟動應用
+若你想協作開發，歡迎提交 PR。建議先整理以下內容：
 
-### Q2: 導出的 CSV 文件在哪裡？
-**A:**
-- 文件自動保存到手機的 **"下載"** 文件夾
-- 可通過文件管理器查看
-- 使用 Excel 或 Google Sheets 打開
-
-### Q3: 熱力圖的位置準不準？
-**A:**
-- 基於信號強度 (RSSI) 估算，會有誤差
-- 環境金屬物體、牆壁等會影響信號
-- 應用使用卡爾曼濾波已盡量平滑數據
-- 實際場景中誤差通常在 5-10 米內
-
-### Q4: 支持多個教室同時使用嗎？
-**A:**
-- 目前不支持，所有設備共用一個 SERVICE_UUID
-- 如需支持，可在代碼中新增 SERVICE_UUID 列表
-
-### Q5: 可以支持更多學生嗎？
-**A:**
-- 理論上支持無限學生（BLE 無連接）
-- 實際受限於藍牙掃描範圍（30-100 米）
+- 修正內容摘要
+- 影響的 Activity / Fragment / API
+- 測試方式
+- 是否需要同步後端 API
 
 ---
 
-## 🔧 開發者信息
-
-### 項目信息
-- **Repository ID**: 1118093502
-- **Language**: Kotlin 100%
-- **主要構建工具**: Gradle with Kotlin DSL
-
-### 聯繫方式
-- GitHub: [@fygmuf5](https://github.com/fygmuf5)
-- 項目地址: [https://github.com/fygmuf5/bluetooth](https://github.com/fygmuf5/bluetooth)
-- Gmail: fygmuf5@gmail.com
-
----
-
-## 📄 許可證
-
-本項目為大學專題研究項目，請根據需要自由使用和修改。
-
----
-
-**最後更新**: 2026-03-01  
-**開發狀態**: 🚧 持續開發中
-
----
-
-## 貢獻指南
-
-歡迎組員的代碼貢獻！請：
-1. Fork 本倉庫
-2. 創建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 創建 Pull Request
-
-感謝每位組員的貢獻！🙏
+如果你要，我也可以再幫你把 README 改成更偏「專案展示型」的版本，或改成「簡潔型 GitHub README」版本。
