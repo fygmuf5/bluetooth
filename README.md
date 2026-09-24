@@ -204,15 +204,3 @@ HeatmapFragment
 - 本倉庫目前以 Android Kotlin 專案為主，核心邏輯集中在 `app/src/main/java/com/mcu/bluetooth/`。
 - 若要正式部署，建議再補齊後端環境、正式登入流程、安全儲存與授權條款。
 
-## 貢獻
-
-若你想協作開發，歡迎提交 PR。建議先整理以下內容：
-
-- 修正內容摘要
-- 影響的 Activity / Fragment / API
-- 測試方式
-- 是否需要同步後端 API
-
----
-
-如果你要，我也可以再幫你把 README 改成更偏「專案展示型」的版本，或改成「簡潔型 GitHub README」版本。
