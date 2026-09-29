@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.method.HideReturnsTransformationMethod
 import android.text.method.PasswordTransformationMethod
+import android.util.Log
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.textfield.TextInputLayout
@@ -62,16 +63,28 @@ class RegisterActivity : AppCompatActivity() {
         btnGetVerifyCode.setOnClickListener {
             val input = etEmailInput.text.toString().trim()
             if (input.isEmpty()) {
-                Toast.makeText(this, "請輸入學號或帳號", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "請輸入學號或教師帳號", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+            
             val fullEmail = formatEmail(input)
+            Log.d("RegisterDebug", "準備發送驗證碼至郵箱: $fullEmail")
+
+            // 防呆機制：發送期間禁用按鈕，防止重複點擊造成網路阻塞
+            btnGetVerifyCode.isEnabled = false
+            btnGetVerifyCode.text = "傳送中..."
+
             NetworkManager.requestVerifyCode(fullEmail) { success, message ->
                 runOnUiThread {
+                    // 恢復按鈕狀態
+                    btnGetVerifyCode.isEnabled = true
+                    btnGetVerifyCode.text = "獲取驗證碼"
+
                     if (success) {
-                        Toast.makeText(this, message ?: "驗證碼已寄出", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, if (message.isNullOrEmpty()) "驗證碼已成功寄出！" else message, Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(this, message ?: "發送失敗", Toast.LENGTH_SHORT).show()
+                        Log.e("RegisterDebug", "驗證碼發送失敗，原因: $message")
+                        Toast.makeText(this, "連線失敗：${message ?: "後端網址無回應，請確認網路連線或 ngrok 是否開機"}", Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -89,21 +102,26 @@ class RegisterActivity : AppCompatActivity() {
             }
 
             if (password != passwordConfirm) {
-                Toast.makeText(this, "密碼不一致", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "兩次輸入的密碼不一致", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
             val fullEmail = formatEmail(input)
             val deviceId = getUniqueDeviceId()
 
+            btnRegisterSubmit.isEnabled = false
+            btnRegisterSubmit.text = "註冊中..."
+
             NetworkManager.registerUser(fullEmail, password, verifyCode, deviceId) { success, message ->
                 runOnUiThread {
+                    btnRegisterSubmit.isEnabled = true
+                    btnRegisterSubmit.text = "確認註冊"
+
                     if (success) {
                         Toast.makeText(this, "註冊成功！", Toast.LENGTH_SHORT).show()
                         finish()
                     } else {
-                        // 這裡會顯示伺服器回傳的錯誤訊息，例如「帳號已存在」
-                        Toast.makeText(this, message ?: "註冊失敗", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, message ?: "註冊失敗，請重新確認驗證碼", Toast.LENGTH_LONG).show()
                     }
                 }
             }

@@ -61,11 +61,10 @@
         <com.google.android.material.tabs.TabItem
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="全體點名單" />
+            android:text="老師課表" />
 
     </com.google.android.material.tabs.TabLayout>
 
-    <!-- 統計與操作列 -->
     <LinearLayout
         android:id="@+id/ll_attendance_summary"
         android:layout_width="match_parent"
@@ -96,7 +95,6 @@
     </LinearLayout>
 
     <FrameLayout
-        android:id="@+id/teacher_content_container"
         android:layout_width="0dp"
         android:layout_height="0dp"
         app:layout_constraintBottom_toBottomOf="parent"
@@ -104,50 +102,69 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/ll_attendance_summary">
 
-        <!-- Page 1: Live List -->
         <LinearLayout
             android:id="@+id/layout_realtime_list"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
             android:visibility="visible">
-
-            <LinearLayout
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="4dp">
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="即時簽到紀錄："
-                    android:textStyle="bold" />
-                <Button
-                    android:id="@+id/export_csv_button"
-                    style="@style/Widget.AppCompat.Button.Small"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="匯出 CSV" />
-            </LinearLayout>
-
+                android:padding="8dp"
+                android:text="即時簽到紀錄："
+                android:textStyle="bold" />
             <ListView
                 android:id="@+id/devices_listview"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:background="#FFFFFF"
-                android:divider="#EEEEEE"
-                android:dividerHeight="1dp" />
+                android:background="#FFFFFF" />
         </LinearLayout>
 
-        <!-- Page 2: Student Grid Container -->
         <LinearLayout
             android:id="@+id/layout_student_grid_container"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
             android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="8dp">
+
+                <Button
+                    android:id="@+id/btn_import_csv"
+                    style="@style/Widget.AppCompat.Button.Small"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:backgroundTint="#2196F3"
+                    android:text="匯入 CSV"
+                    android:textColor="#FFFFFF" />
+
+                <Button
+                    android:id="@+id/btn_back_to_schedule"
+                    style="@style/Widget.AppCompat.Button.Small"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:backgroundTint="#757575"
+                    android:text="返回課表"
+                    android:textColor="#FFFFFF"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/tv_schedule_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:text="學期課表"
+                    android:textStyle="bold"
+                    android:textColor="#333333" />
+            </LinearLayout>
 
             <EditText
                 android:id="@+id/et_student_search"
@@ -157,9 +174,8 @@
                 android:background="@android:drawable/editbox_background"
                 android:hint="搜尋學號..."
                 android:paddingStart="12dp"
-                android:paddingEnd="12dp"
                 android:singleLine="true"
-                android:textSize="14sp" />
+                android:visibility="gone" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rv_student_grid"
@@ -167,7 +183,5 @@
                 android:layout_height="match_parent"
                 android:background="#FFFFFF" />
         </LinearLayout>
-
     </FrameLayout>
-
 </androidx.constraintlayout.widget.ConstraintLayout>
