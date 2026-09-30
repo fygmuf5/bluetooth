@@ -56,20 +56,24 @@ class TeacherControlsFragment : Fragment() {
     private lateinit var layoutRealtimeList: View
     private lateinit var rvStudentGrid: RecyclerView
     
-    // 課表專用元件
     private lateinit var btnImportCsv: Button
     private lateinit var btnBackToSchedule: Button
     private lateinit var tvScheduleTitle: TextView
 
+    // 【核心修正】各課程紀錄隔離 (課程名稱 -> (設備地址 -> Pair(學號, 時間)))
+    private val courseRecordsMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
+    
+    // 即時掃描快取 (當前掃描 Session 總紀錄)
     private val attendanceResults = mutableMapOf<String, String>()
     private val attendanceRecords = mutableMapOf<String, Pair<String, String>>() 
     
-    // 狀態管理
     private var allStudentsList = mutableListOf<StudentStatus>() 
     private var filteredStudentsList = mutableListOf<StudentStatus>()
     private var currentScheduleList = mutableListOf<ScheduleItem>()
     
     private var isViewingStudents = false 
+    private var currentViewingCourseName: String? = null // 當前選中的課程名稱
+    
     private var currentXorKey: String? = null
     private var otpVerifyList: Map<String, String>? = null
     private var isScanning = false
@@ -143,6 +147,7 @@ class TeacherControlsFragment : Fragment() {
 
     private fun showScheduleLayout() {
         isViewingStudents = false
+        currentViewingCourseName = null
         btnBackToSchedule.visibility = View.GONE
         etStudentSearch.visibility = View.GONE
         btnSelectAll.visibility = View.GONE
@@ -156,6 +161,7 @@ class TeacherControlsFragment : Fragment() {
 
     private fun enterCourseStudents(item: ScheduleItem) {
         isViewingStudents = true
+        currentViewingCourseName = item.courseName
         btnBackToSchedule.visibility = View.VISIBLE
         etStudentSearch.visibility = View.VISIBLE
         btnSelectAll.visibility = View.VISIBLE
@@ -171,8 +177,14 @@ class TeacherControlsFragment : Fragment() {
     private fun loadDefaultStudentsForCourse() {
         allStudentsList.clear()
         val baseList = otpVerifyList?.keys?.toList() ?: listOf("11012345", "11012346", "11012347", "11012348", "11012349")
+        
+        // 讀取當前課程的紀錄
+        val currentCourseRecords = currentViewingCourseName?.let { courseRecordsMap[it] } ?: emptyMap()
+        
         baseList.forEach { id ->
-            val isChecked = attendanceRecords.values.any { it.first == id }
+            // 如果在該課程有紀錄，或者在目前掃描 Session 中已發現過，則算出席
+            val isChecked = currentCourseRecords.values.any { it.first == id } || 
+                            attendanceRecords.values.any { it.first == id }
             allStudentsList.add(StudentStatus(id, isChecked))
         }
         filterStudents(etStudentSearch.text.toString())
@@ -196,7 +208,18 @@ class TeacherControlsFragment : Fragment() {
 
         btnSelectAll.setOnClickListener {
             val targetStatus = !allStudentsList.all { it.isPresent }
-            allStudentsList.forEach { it.isPresent = targetStatus }
+            val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            
+            allStudentsList.forEach { student ->
+                student.isPresent = targetStatus
+                // 同步至課程紀錄 Map 以便切換視圖後維持狀態
+                currentViewingCourseName?.let { course ->
+                    val map = courseRecordsMap.getOrPut(course) { mutableMapOf() }
+                    val manualKey = "Manual_${student.id}"
+                    if (targetStatus) map[manualKey] = Pair(student.id, timeNow)
+                    else map.remove(manualKey)
+                }
+            }
             rvStudentGrid.adapter?.notifyDataSetChanged()
             updateAttendanceSummary()
         }
@@ -221,7 +244,6 @@ class TeacherControlsFragment : Fragment() {
                     if (isViewingStudents) {
                         btnSelectAll.visibility = View.VISIBLE
                         etStudentSearch.visibility = View.VISIBLE
-                        btnBackToSchedule.visibility = View.VISIBLE
                     } else {
                         showScheduleLayout()
                     }
@@ -250,7 +272,7 @@ class TeacherControlsFragment : Fragment() {
                             }
                         }
                     }
-                    Toast.makeText(requireContext(), "成功匯入 ${currentScheduleList.size} 節課程！", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "課表匯入成功", Toast.LENGTH_SHORT).show()
                     if (!isViewingStudents) showScheduleLayout()
                 }
             }
@@ -269,7 +291,10 @@ class TeacherControlsFragment : Fragment() {
             allStudentsList.filter { it.id.lowercase().contains(lowerCaseQuery) }
                 .forEach { filteredStudentsList.add(it) }
         }
-        if (isViewingStudents) rvStudentGrid.adapter?.notifyDataSetChanged()
+        val adapter = rvStudentGrid.adapter
+        if (isViewingStudents && adapter is StudentGridAdapter) {
+            adapter.notifyDataSetChanged()
+        }
     }
 
     private fun updateAttendanceSummary() {
@@ -283,7 +308,7 @@ class TeacherControlsFragment : Fragment() {
         val required = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         } else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        
+
         val missing = required.filter { 
             ContextCompat.checkSelfPermission(requireContext(), it) != PackageManager.PERMISSION_GRANTED 
         }
@@ -291,7 +316,7 @@ class TeacherControlsFragment : Fragment() {
         if (missing.isEmpty()) {
             startSecureSessionLoop()
         } else {
-            // 正確修復：針對 List 呼叫 toTypedArray() 轉為 Array 給 launch 使用
+            // 【修復紅字】launch 接收的是陣列
             requestPermissionsLauncher.launch(missing.toTypedArray())
         }
     }
@@ -305,8 +330,12 @@ class TeacherControlsFragment : Fragment() {
         btnAttendanceToggle.text = "停止並回傳"
         btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#F44336"))
         currentSessionId = "sess_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+        
         attendanceResults.clear()
         attendanceRecords.clear()
+        // 點名開始時，清空當前課程舊紀錄
+        currentViewingCourseName?.let { courseRecordsMap[it]?.clear() }
+        
         allStudentsList.forEach { it.isPresent = false }
         filterStudents(etStudentSearch.text.toString())
         updateListView()
@@ -342,17 +371,33 @@ class TeacherControlsFragment : Fragment() {
         try { bleScanner?.stopScan(scanCallback) } catch(e: Exception){}
         btnAttendanceToggle.text = "開始點名"
         btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#4CAF50"))
-        tvTeacherStatus.text = "回傳結果並清除定位緩存..."
+        tvTeacherStatus.text = "正在回傳點名結果..."
+        
+        val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val uploadMap = if (currentViewingCourseName != null) {
+            courseRecordsMap.getOrPut(currentViewingCourseName!!) { mutableMapOf() }
+        } else {
+            attendanceRecords
+        }
+
+        // 同步手動勾選狀態
+        allStudentsList.filter { it.isPresent }.forEach { student ->
+            if (uploadMap.values.none { it.first == student.id }) {
+                uploadMap["Manual_${student.id}"] = Pair(student.id, timeNow)
+            }
+        }
+
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
         NetworkManager.clearCoordinates(email, "teacherPassword", currentSessionId) { _, _ -> }
-        
-        val totalToUpload = attendanceRecords.size
-        if (totalToUpload == 0) {
+
+        if (uploadMap.isEmpty()) {
             tvTeacherStatus.text = "點名結束 (無紀錄)"
             return
         }
+
         val completedCount = AtomicInteger(0)
-        attendanceRecords.forEach { (address, pair) ->
+        val totalToUpload = uploadMap.size
+        uploadMap.forEach { (address, pair) ->
             NetworkManager.syncAttendance(pair.first, address) {
                 if (completedCount.incrementAndGet() == totalToUpload) {
                     activity?.runOnUiThread {
@@ -387,23 +432,23 @@ class TeacherControlsFragment : Fragment() {
     private fun processCheckInResult(id: String, address: String) {
         val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         activity?.runOnUiThread {
-            if (attendanceResults[address] != id) {
+            val currentCourseRecords = currentViewingCourseName?.let { courseRecordsMap.getOrPut(it) { mutableMapOf() } }
+            val alreadyInCourse = currentCourseRecords?.containsKey(address) == true
+
+            if (attendanceResults[address] != id || (currentViewingCourseName != null && !alreadyInCourse)) {
                 attendanceResults[address] = id
                 attendanceRecords[address] = Pair(id, timeString)
+                currentCourseRecords?.put(address, Pair(id, timeString))
+                
                 updateListView()
                 
                 allStudentsList.find { it.id == id }?.let { student ->
                     if (!student.isPresent) {
                         student.isPresent = true
-                        // 確保只有在檢視學生列表時才更新 RecyclerView
-                        if (isViewingStudents) {
-                            val adapter = rvStudentGrid.adapter
-                            if (adapter is StudentGridAdapter) {
-                                val indexInFiltered = filteredStudentsList.indexOfFirst { it.id == id }
-                                if (indexInFiltered != -1) {
-                                    adapter.notifyItemChanged(indexInFiltered)
-                                }
-                            }
+                        val adapter = rvStudentGrid.adapter
+                        if (isViewingStudents && adapter is StudentGridAdapter) {
+                            val index = filteredStudentsList.indexOf(student)
+                            if (index != -1) adapter.notifyItemChanged(index)
                         }
                         updateAttendanceSummary()
                     }
@@ -469,8 +514,16 @@ class TeacherControlsFragment : Fragment() {
             holder.cbStatus.setOnCheckedChangeListener(null)
             holder.cbStatus.isChecked = student.isPresent
             updateItemVisual(holder, student.isPresent)
+            
             holder.cbStatus.setOnCheckedChangeListener { _, isChecked ->
                 student.isPresent = isChecked
+                // 手動勾選同步回隔離的 Map，防止 view 切換後消失
+                currentViewingCourseName?.let { course ->
+                    val map = courseRecordsMap.getOrPut(course) { mutableMapOf() }
+                    val manualKey = "Manual_${student.id}"
+                    if (isChecked) map[manualKey] = Pair(student.id, "Manual")
+                    else map.remove(manualKey)
+                }
                 updateItemVisual(holder, isChecked)
                 updateAttendanceSummary()
             }
