@@ -42,7 +42,7 @@ object NetworkManager {
     fun startAttendanceSession(email: String, callback: (String?) -> Unit) {
         val json = JSONObject().apply { put("email", email) }
         sendJsonPostWithResponse(BASE_URL + PATH_START_SESSION, json) { response ->
-            val xorKey = if (response != null && response.has("xor_key")) response.optString("xor_key", "") else null
+            val xorKey = response?.optString("xor_key")?.takeIf { it.isNotEmpty() }
             callback(xorKey)
         }
     }
@@ -62,8 +62,8 @@ object NetworkManager {
     fun getStudentToken(studentId: String, callback: (otp: String?, xorKey: String?) -> Unit) {
         val json = JSONObject().apply { put("student_id", studentId) }
         sendJsonPostWithResponse(BASE_URL + PATH_GET_MY_TOKEN, json) { response ->
-            val otp = if (response != null && response.has("otp")) response.optString("otp", "") else null
-            val xorKey = if (response != null && response.has("xor_key")) response.optString("xor_key", "") else null
+            val otp = response?.optString("otp")?.takeIf { it.isNotEmpty() }
+            val xorKey = response?.optString("xor_key")?.takeIf { it.isNotEmpty() }
             callback(otp, xorKey)
         }
     }

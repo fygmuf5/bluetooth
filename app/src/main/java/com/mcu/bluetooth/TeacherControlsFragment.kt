@@ -40,10 +40,8 @@ class TeacherControlsFragment : Fragment() {
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
     private val REFRESH_INTERVAL = 5 * 60 * 1000L
 
-    private val bluetoothAdapter: BluetoothAdapter? by lazy {
-        (requireContext().getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-    }
-    private val bleScanner: BluetoothLeScanner? by lazy { bluetoothAdapter?.bluetoothLeScanner }
+    private val bluetoothAdapter: BluetoothAdapter? get() = (context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+    private val bleScanner: BluetoothLeScanner? get() = bluetoothAdapter?.bluetoothLeScanner
 
     // --- 畫面一：選擇課程表格 (登入後首頁) ---
     private lateinit var layoutCourseSelection: View
@@ -86,6 +84,7 @@ class TeacherControlsFragment : Fragment() {
 
     // 各課程紀錄隔離：課程名稱 -> (設備地址 -> Pair(學號, 時間))
     private val courseRecordsMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
+    // 即時列表紀錄：學號 -> 設備地址 (以學號為唯一 Key，確保同個學生只出現一次紀錄)
     private val attendanceResults = mutableMapOf<String, String>()
     private val attendanceRecords = mutableMapOf<String, Pair<String, String>>()
 
@@ -225,6 +224,12 @@ class TeacherControlsFragment : Fragment() {
         layoutStudentGridContainer.visibility = View.GONE
         layoutHeatmapContainer.visibility = View.GONE
 
+        // 切換課程時同步該課程已簽到的名單至即時列表 (以學號為唯一 Key)
+        attendanceResults.clear()
+        courseRecordsMap[course.courseName]?.values?.forEach { (studentId, _) ->
+            attendanceResults[studentId] = course.courseName
+        }
+
         updateAttendanceSummary()
         updateListView()
 
@@ -239,7 +244,7 @@ class TeacherControlsFragment : Fragment() {
 
     private fun loadStudentsForCourse(courseName: String) {
         allStudentsList.clear()
-        val baseList = otpVerifyList?.keys?.toList() ?: listOf("11012345", "11012346", "11012347", "11012348", "11012349")
+        val baseList = otpVerifyList?.keys?.toList() ?: listOf("12360615", "12360596", "12360651", "12360305", "12363033")
         val currentCourseRecords = courseRecordsMap[courseName] ?: emptyMap()
 
         baseList.forEach { id ->
@@ -492,14 +497,16 @@ class TeacherControlsFragment : Fragment() {
         performSessionRefresh()
         handler.postDelayed(refreshRunnable, REFRESH_INTERVAL)
 
-        val filter = ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), null).build()
+        // 兼容不同硬體晶片：同時提供 ServiceData 與 ServiceUuid 過濾器 (OR 關係)
+        val filterData = ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), null).build()
+        val filterUuid = ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .build()
 
-        bleScanner?.startScan(listOf(filter), settings, scanCallback)
+        bleScanner?.startScan(listOf(filterData, filterUuid), settings, scanCallback)
     }
 
     private fun performSessionRefresh() {
@@ -507,7 +514,7 @@ class TeacherControlsFragment : Fragment() {
         tvTeacherStatus.text = "正在同步伺服器點名訊號..."
         NetworkManager.startAttendanceSession(email) { xorKey ->
             activity?.runOnUiThread {
-                if (xorKey != null) {
+                if (!xorKey.isNullOrEmpty()) {
                     currentXorKey = xorKey
                     NetworkManager.getVerifyList(email) { list ->
                         activity?.runOnUiThread {
@@ -516,6 +523,8 @@ class TeacherControlsFragment : Fragment() {
                             tvTeacherStatus.text = "✅ 點名循環中 (${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())})"
                         }
                     }
+                } else {
+                    tvTeacherStatus.text = "❌ 同步密鑰失敗，請檢查網路連線"
                 }
             }
         }
@@ -574,6 +583,8 @@ class TeacherControlsFragment : Fragment() {
             val xorKey = currentXorKey ?: return
 
             val keyBytes = xorKey.toByteArray(Charset.forName("UTF-8"))
+            if (keyBytes.isEmpty()) return // 防呆：避免金鑰為空時除以零崩潰
+
             val decryptedBytes = ByteArray(payload.size)
             for (i in payload.indices) {
                 decryptedBytes[i] = (payload[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
@@ -582,9 +593,18 @@ class TeacherControlsFragment : Fragment() {
 
             val parts = decryptedStr.split("|")
             if (parts.size >= 2) {
-                val studentId = parts[0]
-                val receivedOtp = parts[1]
-                if (otpVerifyList?.get(studentId) == receivedOtp) processCheckInResult(studentId, address)
+                val studentId = parts[0].trim()
+                val receivedOtp = parts[1].trim()
+                if (otpVerifyList?.get(studentId) == receivedOtp) {
+                    processCheckInResult(studentId, address)
+                }
+            }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            Log.e("TeacherControls", "藍牙掃描失敗，錯誤碼: $errorCode")
+            activity?.runOnUiThread {
+                tvTeacherStatus.text = "⚠️ 藍牙掃描失敗 (代碼: $errorCode)，請嘗試重啟點名"
             }
         }
     }
@@ -594,25 +614,31 @@ class TeacherControlsFragment : Fragment() {
         activity?.runOnUiThread {
             val courseName = selectedCourse?.courseName
             val currentCourseRecords = courseName?.let { courseRecordsMap.getOrPut(it) { mutableMapOf() } }
-            val alreadyInCourse = currentCourseRecords?.containsKey(address) == true
 
-            if (attendanceResults[address] != id || (courseName != null && !alreadyInCourse)) {
-                attendanceResults[address] = id
-                attendanceRecords[address] = Pair(id, timeString)
-                currentCourseRecords?.put(address, Pair(id, timeString))
+            // 核心去重：若該學號已經點名成功，則直接忽略後續重複訊號，確保即時列表只顯示單一紀錄
+            if (attendanceResults.containsKey(id)) {
+                return@runOnUiThread
+            }
 
-                updateListView()
+            // 以學號 (id) 作為唯一鍵，記錄設備地址與時間
+            attendanceResults[id] = address
+            attendanceRecords[address] = Pair(id, timeString)
 
-                allStudentsList.find { it.id == id }?.let { student ->
-                    if (!student.isPresent) {
-                        student.isPresent = true
-                        val adapter = rvStudentGrid.adapter
-                        if (adapter is StudentGridAdapter) {
-                            val index = filteredStudentsList.indexOf(student)
-                            if (index != -1) adapter.notifyItemChanged(index)
-                        }
-                        updateAttendanceSummary()
+            // 若該學生先前有手動補簽 (Manual)，先移除手動標記並更新為實際藍牙打卡紀錄
+            currentCourseRecords?.remove("Manual_$id")
+            currentCourseRecords?.put(address, Pair(id, timeString))
+
+            updateListView()
+
+            allStudentsList.find { it.id == id }?.let { student ->
+                if (!student.isPresent) {
+                    student.isPresent = true
+                    val adapter = rvStudentGrid.adapter
+                    if (adapter is StudentGridAdapter) {
+                        val index = filteredStudentsList.indexOf(student)
+                        if (index != -1) adapter.notifyItemChanged(index)
                     }
+                    updateAttendanceSummary()
                 }
             }
         }
@@ -620,7 +646,7 @@ class TeacherControlsFragment : Fragment() {
 
     private fun updateListView() {
         receivedBroadcastsAdapter.clear()
-        receivedBroadcastsAdapter.addAll(attendanceResults.values.toList().map { "[$it] ✅ 點名成功" }.reversed())
+        receivedBroadcastsAdapter.addAll(attendanceResults.keys.toList().distinct().map { "[$it] ✅ 點名成功" }.reversed())
         receivedBroadcastsAdapter.notifyDataSetChanged()
     }
 

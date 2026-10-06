@@ -29,8 +29,8 @@ class MainActivity : AppCompatActivity() {
     private val AUTO_REFRESH_INTERVAL = 2 * 60 * 1000L // 縮短為 2 分鐘，確保比老師端快，增加同步成功率 (修正點 5)
 
     private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
-    private val bluetoothAdapter: BluetoothAdapter? by lazy { bluetoothManager.adapter }
-    private val bleAdvertiser: BluetoothLeAdvertiser? by lazy { bluetoothAdapter?.bluetoothLeAdvertiser }
+    private val bluetoothAdapter: BluetoothAdapter? get() = bluetoothManager.adapter
+    private val bleAdvertiser: BluetoothLeAdvertiser? get() = bluetoothAdapter?.bluetoothLeAdvertiser
 
     // 儲存當前的廣播回呼，以便正確停止 (修正點 1)
     private var currentAdvertiseCallback: AdvertiseCallback? = null
@@ -120,7 +120,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         broadcastButton.setOnClickListener { 
-            startAutomaticAttendance()
+            // 防抖：避免短時間快速連點導致藍牙廣播實例衝突
+            broadcastButton.isEnabled = false
+            handler.postDelayed({ broadcastButton.isEnabled = true }, 2000)
+
+            if (hasRequiredBluetoothPermissions()) {
+                startAutomaticAttendance()
+            } else {
+                requestBluetoothPermissions.launch(getRequiredBluetoothPermissions())
+            }
         }
 
         settingsButton.setOnClickListener { view ->
@@ -137,21 +145,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startAutomaticAttendance() {
-        // 檢查硬體支援 (修正點 3)
-        if (bluetoothAdapter?.isMultipleAdvertisementSupported == false) {
+        if (studentId.isEmpty() || studentId == "Unknown") return
+
+        if (bluetoothAdapter == null) {
+            statusTextView.text = "狀態: 裝置無藍牙硬體"
+            return
+        }
+
+        if (!bluetoothAdapter!!.isEnabled) {
+            statusTextView.text = "狀態: 請先開啟藍牙"
+            Toast.makeText(this, "請先開啟手機藍牙以進行點名", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // 避免因部分晶片 isMultipleAdvertisementSupported 回傳 false 誤判，改以 bleAdvertiser 是否有效判斷
+        if (bleAdvertiser == null) {
             statusTextView.text = "狀態: 裝置不支援藍牙廣播點名"
             Toast.makeText(this, "您的手機不支援 BLE 廣播功能", Toast.LENGTH_LONG).show()
             return
         }
-
-        if (studentId.isEmpty() || studentId == "Unknown") return
 
         val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         statusTextView.text = "狀態: 正在同步權杖 ($timeNow)..."
 
         NetworkManager.getStudentToken(studentId) { otp, xorKey ->
             runOnUiThread {
-                if (otp != null && xorKey != null) {
+                if (!otp.isNullOrEmpty() && !xorKey.isNullOrEmpty()) {
                     broadcastEncryptedMessage(studentId, otp, xorKey)
                     statusTextView.text = "狀態: 自動發送中 (OTP: $otp)"
                 } else {
@@ -201,6 +220,11 @@ class MainActivity : AppCompatActivity() {
         val rawBytes = rawData.toByteArray(Charset.forName("UTF-8"))
         val keyBytes = xorKey.toByteArray(Charset.forName("UTF-8"))
 
+        if (keyBytes.isEmpty()) {
+            statusTextView.text = "狀態: 金鑰無效，無法加密"
+            return
+        }
+
         val encryptedBytes = ByteArray(rawBytes.size)
         for (i in rawBytes.indices) {
             encryptedBytes[i] = (rawBytes[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
@@ -215,11 +239,22 @@ class MainActivity : AppCompatActivity() {
         
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .setConnectable(false)
             .build()
+
+        // 避免封包超過 31 bytes (DATA_TOO_LARGE)：
+        // 將主要 Service Data 放在主廣播封包，Service UUID 放入 ScanResponse
         val data = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
             .addServiceData(ParcelUuid(SERVICE_UUID), dataBytes)
+            .build()
+
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
 
         currentAdvertiseCallback = object : AdvertiseCallback() {
@@ -227,11 +262,21 @@ class MainActivity : AppCompatActivity() {
                 super.onStartSuccess(settingsInEffect)
             }
             override fun onStartFailure(errorCode: Int) {
-                runOnUiThread { statusTextView.text = "廣播失敗: $errorCode" }
+                runOnUiThread {
+                    val msg = when (errorCode) {
+                        ADVERTISE_FAILED_DATA_TOO_LARGE -> "封包過大 (1)"
+                        ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "廣播實例過多 (2)"
+                        ADVERTISE_FAILED_ALREADY_STARTED -> return@runOnUiThread // 已在廣播中，不視為錯誤
+                        ADVERTISE_FAILED_INTERNAL_ERROR -> "系統藍牙內部錯誤，請重啟藍牙 (4)"
+                        ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "裝置不支援此廣播模式 (5)"
+                        else -> "代碼 $errorCode"
+                    }
+                    statusTextView.text = "廣播失敗: $msg"
+                }
             }
         }
 
-        bleAdvertiser?.startAdvertising(settings, data, currentAdvertiseCallback)
+        bleAdvertiser?.startAdvertising(settings, data, scanResponse, currentAdvertiseCallback)
     }
 
     private fun stopBleAdvertising() {

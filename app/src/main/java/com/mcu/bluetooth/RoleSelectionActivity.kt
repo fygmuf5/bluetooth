@@ -113,7 +113,7 @@ class RoleSelectionActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.student_button).setOnClickListener { 
             sharedPref.edit().putString("saved_password", "student_pass").apply()
-            startMainActivity("STUDENT", "11012345@me.mcu.edu.tw") 
+            startMainActivity("STUDENT", "12360615@me.mcu.edu.tw") 
         }
     }
 
