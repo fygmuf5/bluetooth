@@ -40,10 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var broadcastButton: Button
     private lateinit var settingsButton: ImageButton
     private lateinit var studentCard: View
-    private lateinit var teacherPagerContainer: View
-    private lateinit var viewPager: ViewPager2
-    private lateinit var dot1: ImageView
-    private lateinit var dot2: ImageView
+    private lateinit var teacherContainer: FrameLayout
 
     private var currentRole: String? = null
     private var userEmail: String? = null
@@ -90,10 +87,7 @@ class MainActivity : AppCompatActivity() {
         broadcastButton = findViewById(R.id.broadcast_button)
         settingsButton = findViewById(R.id.settings_button)
         studentCard = findViewById(R.id.student_card)
-        teacherPagerContainer = findViewById(R.id.teacher_pager_container)
-        viewPager = findViewById(R.id.teacher_view_pager)
-        dot1 = findViewById(R.id.dot1)
-        dot2 = findViewById(R.id.dot2)
+        teacherContainer = findViewById(R.id.teacher_container)
         
         broadcastButton.text = "手動立即簽到"
     }
@@ -101,14 +95,19 @@ class MainActivity : AppCompatActivity() {
     private fun setupRoleUI() {
         when (currentRole) {
             "TEACHER" -> {
-                teacherPagerContainer.visibility = View.VISIBLE
+                teacherContainer.visibility = View.VISIBLE
                 studentCard.visibility = View.GONE
-                statusTextView.text = "身份: 老師 (點名週期運行中)"
-                setupTeacherViewPager()
+                findViewById<View>(R.id.status_card).visibility = View.GONE
+                if (supportFragmentManager.findFragmentById(R.id.teacher_container) == null) {
+                    supportFragmentManager.beginTransaction()
+                        .replace(R.id.teacher_container, TeacherControlsFragment())
+                        .commit()
+                }
             }
             "STUDENT" -> {
-                teacherPagerContainer.visibility = View.GONE
+                teacherContainer.visibility = View.GONE
                 studentCard.visibility = View.VISIBLE
+                findViewById<View>(R.id.status_card).visibility = View.VISIBLE
                 statusTextView.text = "身份: 學生 (背景自動點名中)"
                 studentIdTextView.text = "學號 : $studentId"
             }
@@ -117,27 +116,6 @@ class MainActivity : AppCompatActivity() {
                 finish()
             }
         }
-    }
-
-    private fun setupTeacherViewPager() {
-        val adapter = object : FragmentStateAdapter(this) {
-            override fun getItemCount(): Int = 2
-            override fun createFragment(position: Int): Fragment {
-                return if (position == 0) TeacherControlsFragment() else HeatmapFragment()
-            }
-        }
-        viewPager.adapter = adapter
-        viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
-            override fun onPageSelected(position: Int) {
-                if (position == 0) {
-                    dot1.setImageResource(R.drawable.dot_filled)
-                    dot2.setImageResource(R.drawable.dot_empty)
-                } else {
-                    dot1.setImageResource(R.drawable.dot_empty)
-                    dot2.setImageResource(R.drawable.dot_filled)
-                }
-            }
-        })
     }
 
     private fun setupListeners() {
