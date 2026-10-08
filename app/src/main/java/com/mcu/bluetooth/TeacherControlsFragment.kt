@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class TeacherControlsFragment : Fragment() {
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    private val REFRESH_INTERVAL = 5 * 60 * 1000L
+    private val REFRESH_INTERVAL = 30 * 1000L // 設定為每 30 秒自動向伺服器同步更新一次 XOR 金鑰與 OTP 名單
 
     private val bluetoothAdapter: BluetoothAdapter? get() = (context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
     private val bleScanner: BluetoothLeScanner? get() = bluetoothAdapter?.bluetoothLeScanner
@@ -87,6 +87,8 @@ class TeacherControlsFragment : Fragment() {
     // 即時列表紀錄：學號 -> 設備地址 (以學號為唯一 Key，確保同個學生只出現一次紀錄)
     private val attendanceResults = mutableMapOf<String, String>()
     private val attendanceRecords = mutableMapOf<String, Pair<String, String>>()
+    // 即時列表顯示快取：學號或識別 Key -> 顯示字串 (包含成功與失敗狀態，保留最新時間)
+    private val realtimeDisplayMap = linkedMapOf<String, String>()
 
     private val allStudentsList = mutableListOf<StudentStatus>()
     private val filteredStudentsList = mutableListOf<StudentStatus>()
@@ -226,8 +228,11 @@ class TeacherControlsFragment : Fragment() {
 
         // 切換課程時同步該課程已簽到的名單至即時列表 (以學號為唯一 Key)
         attendanceResults.clear()
-        courseRecordsMap[course.courseName]?.values?.forEach { (studentId, _) ->
+        realtimeDisplayMap.clear()
+        courseRecordsMap[course.courseName]?.values?.forEach { (studentId, time) ->
             attendanceResults[studentId] = course.courseName
+            val displayTime = if (time.isNotEmpty() && time != "Manual") " ($time)" else ""
+            realtimeDisplayMap[studentId] = "[$studentId] ✅ 點名成功$displayTime"
         }
 
         updateAttendanceSummary()
@@ -488,6 +493,7 @@ class TeacherControlsFragment : Fragment() {
 
         attendanceResults.clear()
         attendanceRecords.clear()
+        realtimeDisplayMap.clear()
         selectedCourse?.courseName?.let { courseRecordsMap[it]?.clear() }
 
         allStudentsList.forEach { it.isPresent = false }
@@ -595,9 +601,30 @@ class TeacherControlsFragment : Fragment() {
             if (parts.size >= 2) {
                 val studentId = parts[0].trim()
                 val receivedOtp = parts[1].trim()
-                if (otpVerifyList?.get(studentId) == receivedOtp) {
+
+                // 尋找 OTP：同時比對完整 ID、去純數字 ID，與忽略大小寫
+                val expectedOtp = otpVerifyList?.get(studentId)
+                    ?: otpVerifyList?.get(studentId.substringBefore("@"))
+                    ?: otpVerifyList?.entries?.find { 
+                        it.key.equals(studentId, ignoreCase = true) || 
+                        it.key.substringBefore("@").equals(studentId.substringBefore("@"), ignoreCase = true) 
+                    }?.value
+
+                if (expectedOtp != null && (receivedOtp == expectedOtp || receivedOtp.startsWith(expectedOtp))) {
+                    Log.d("TeacherControls", "✅ 點名驗證成功: studentId=$studentId, address=$address")
                     processCheckInResult(studentId, address)
+                } else {
+                    val reason = when {
+                        otpVerifyList == null -> "名單同步中"
+                        expectedOtp == null -> "非本班名單"
+                        else -> "OTP驗證不符"
+                    }
+                    Log.w("TeacherControls", "❌ OTP 驗證失敗: studentId=$studentId, receivedOtp=$receivedOtp, expectedOtp=$expectedOtp ($reason)")
+                    processCheckInFailure(studentId, reason)
                 }
+            } else {
+                Log.w("TeacherControls", "⚠️ 藍牙解密封包格式不符: $decryptedStr")
+                processCheckInFailure(address, "封包格式異常")
             }
         }
 
@@ -628,25 +655,57 @@ class TeacherControlsFragment : Fragment() {
             currentCourseRecords?.remove("Manual_$id")
             currentCourseRecords?.put(address, Pair(id, timeString))
 
+            // 更新即時列表 (若先前有失敗紀錄則取代為成功，並置頂)
+            realtimeDisplayMap.remove(id)
+            realtimeDisplayMap[id] = "[$id] ✅ 點名成功 ($timeString)"
             updateListView()
 
-            allStudentsList.find { it.id == id }?.let { student ->
-                if (!student.isPresent) {
-                    student.isPresent = true
-                    val adapter = rvStudentGrid.adapter
-                    if (adapter is StudentGridAdapter) {
-                        val index = filteredStudentsList.indexOf(student)
-                        if (index != -1) adapter.notifyItemChanged(index)
-                    }
-                    updateAttendanceSummary()
+            var student = allStudentsList.find { it.id == id }
+            if (student == null) {
+                // 動態加入不在預設名單中的學號，確保點名卡片與即時列表同步顯示
+                student = StudentStatus(id, true)
+                allStudentsList.add(student)
+                filterStudents(etStudentSearch.text.toString())
+            } else if (!student.isPresent) {
+                student.isPresent = true
+                val adapter = rvStudentGrid.adapter
+                if (adapter is StudentGridAdapter) {
+                    val index = filteredStudentsList.indexOf(student)
+                    if (index != -1) adapter.notifyItemChanged(index)
                 }
             }
+            updateAttendanceSummary()
+        }
+    }
+
+    private fun processCheckInFailure(key: String, reason: String) {
+        // 若該學生已經點名成功，則不被後續重複廣播的暫態或失敗訊號覆蓋
+        if (attendanceResults.containsKey(key)) {
+            return
+        }
+
+        val timeString = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        activity?.runOnUiThread {
+            if (attendanceResults.containsKey(key)) {
+                return@runOnUiThread
+            }
+
+            val displayText = "[$key] ❌ 點名失敗 ($reason, $timeString)"
+            // 若該對象已經是相同的失敗狀態，避免高頻重複更新 UI
+            val currentText = realtimeDisplayMap[key]
+            if (currentText != null && currentText.startsWith("[$key] ❌ 點名失敗 ($reason")) {
+                return@runOnUiThread
+            }
+
+            realtimeDisplayMap.remove(key)
+            realtimeDisplayMap[key] = displayText
+            updateListView()
         }
     }
 
     private fun updateListView() {
         receivedBroadcastsAdapter.clear()
-        receivedBroadcastsAdapter.addAll(attendanceResults.keys.toList().distinct().map { "[$it] ✅ 點名成功" }.reversed())
+        receivedBroadcastsAdapter.addAll(realtimeDisplayMap.values.toList().reversed())
         receivedBroadcastsAdapter.notifyDataSetChanged()
     }
 
