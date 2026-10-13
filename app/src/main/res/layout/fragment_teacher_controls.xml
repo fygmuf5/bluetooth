@@ -52,7 +52,7 @@
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="匯入課程名單"
+                android:text="匯入課程"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -237,23 +237,25 @@
                         android:singleLine="true"
                         android:textSize="13sp" />
 
-                    <Button
-                        android:id="@+id/btn_import_students"
-                        style="@style/Widget.AppCompat.Button.Borderless.Colored"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:layout_marginStart="4dp"
-                        android:text="匯入名單"
-                        android:textSize="12sp" />
 
                     <Button
                         android:id="@+id/btn_select_all"
-                        style="@style/Widget.AppCompat.Button.Borderless.Colored"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                         android:layout_width="wrap_content"
                         android:layout_height="36dp"
                         android:layout_marginStart="4dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minHeight="0dp"
+                        android:minWidth="0dp"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="0dp"
                         android:text="全選"
-                        android:textSize="12sp" />
+                        android:textColor="@color/black"
+                        android:textSize="12sp"
+                        app:cornerRadius="6dp"
+                        app:strokeColor="@color/black"
+                        app:strokeWidth="1dp" />
                 </LinearLayout>
 
                 <androidx.recyclerview.widget.RecyclerView

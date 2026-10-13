@@ -67,7 +67,6 @@ class TeacherControlsFragment : Fragment() {
     private lateinit var layoutStudentGridContainer: View
     private lateinit var etStudentSearch: EditText
     private lateinit var btnSelectAll: Button
-    private lateinit var btnImportStudents: Button
     private lateinit var rvStudentGrid: RecyclerView
 
     // Tab 3: 教室熱力圖
@@ -86,7 +85,6 @@ class TeacherControlsFragment : Fragment() {
 
     // 課程自訂學生名單：課程名稱 -> List<StudentStatus>
     private val courseStudentsMap = mutableMapOf<String, MutableList<StudentStatus>>()
-    private var pendingImportCourse: String? = null
 
     // 各課程紀錄隔離：課程名稱 -> (設備地址 -> Pair(學號, 時間))
     private val courseRecordsMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
@@ -132,9 +130,7 @@ class TeacherControlsFragment : Fragment() {
     private val pickScheduleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
-                val targetCourse = pendingImportCourse ?: selectedCourse?.courseName
-                pendingImportCourse = null
-                handleImport(uri, targetCourse)
+                handleImport(uri)
             }
         }
     }
@@ -179,7 +175,6 @@ class TeacherControlsFragment : Fragment() {
         layoutStudentGridContainer = view.findViewById(R.id.layout_student_grid_container)
         etStudentSearch = view.findViewById(R.id.et_student_search)
         btnSelectAll = view.findViewById(R.id.btn_select_all)
-        btnImportStudents = view.findViewById(R.id.btn_import_students)
         rvStudentGrid = view.findViewById(R.id.rv_student_grid)
 
         // Tab 3
@@ -224,7 +219,8 @@ class TeacherControlsFragment : Fragment() {
         layoutCourseSelection.visibility = View.GONE
         layoutCourseDetail.visibility = View.VISIBLE
 
-        tvSelectedCourseTitle.text = "${course.courseName} (${course.location}) - ${course.period}"
+        val locationStr = if (course.location.isNotEmpty()) " (${course.location})" else ""
+        tvSelectedCourseTitle.text = "${course.courseName}$locationStr - ${course.period}"
 
         loadStudentsForCourse(course.courseName)
 
@@ -283,15 +279,7 @@ class TeacherControlsFragment : Fragment() {
 
     private fun setupListeners() {
         btnImportCsv.setOnClickListener {
-            pendingImportCourse = null
             openFilePicker("選擇課程名單 (CSV 或 XLSX)")
-        }
-
-        btnImportStudents.setOnClickListener {
-            val currentName = selectedCourse?.courseName
-            pendingImportCourse = currentName
-            val title = if (!currentName.isNullOrEmpty()) "選擇 [$currentName] 學生名單 (CSV 或 XLSX)" else "選擇學生名單 (CSV 或 XLSX)"
-            openFilePicker(title)
         }
 
         btnBackToSchedule.setOnClickListener {
@@ -457,59 +445,54 @@ class TeacherControlsFragment : Fragment() {
         pickScheduleLauncher.launch(Intent.createChooser(intent, title))
     }
 
-    private fun handleImport(uri: Uri, targetCourse: String?) {
+    private fun handleImport(uri: Uri) {
         try {
-            val result = CourseScheduleParser.parseImport(requireContext(), uri, targetCourse)
-            when (result) {
-                is ParsedImportResult.ScheduleResult -> {
-                    val list = result.scheduleItems
-                    if (list.isNotEmpty()) {
-                        currentScheduleList.clear()
-                        currentScheduleList.addAll(list)
-                        Toast.makeText(requireContext(), "課表名單匯入成功 (共 ${list.size} 門課程)", Toast.LENGTH_SHORT).show()
-                        if (selectedCourse == null) {
-                            showCourseSelectionScreen()
-                        }
-                    } else {
-                        Toast.makeText(requireContext(), "未讀取到有效的課程資料，請確認檔案格式", Toast.LENGTH_LONG).show()
-                    }
-                }
-                is ParsedImportResult.StudentRosterResult -> {
-                    val students = result.students
-                    if (students.isNotEmpty()) {
-                        var course = CourseScheduleParser.findMatchingCourse(currentScheduleList, result.courseName)
-                        val effectiveCourseName = course?.courseName ?: result.courseName
+            val fileName = CourseScheduleParser.getFileName(requireContext(), uri)
+            val extractedName = CourseScheduleParser.extractCourseNameFromFileName(fileName)
+                .ifBlank { fileName.substringBeforeLast(".").trim() }
+                .ifBlank { "未命名課程" }
 
-                        if (course == null) {
-                            val newCourse = ScheduleItem("未指定時段", effectiveCourseName, "")
-                            currentScheduleList.add(newCourse)
-                            course = newCourse
-                        }
+            val (courseName, location) = CourseScheduleParser.extractCourseAndLocation(extractedName)
 
-                        val studentStatusList = students.map { StudentStatus(it.id, it.name) }
-                            .sortedWith { a, b -> CourseScheduleParser.compareStudentIds(a.id, b.id) }
-                        courseStudentsMap[effectiveCourseName] = studentStatusList.toMutableList()
+            val rows = CourseScheduleParser.parseRawRows(requireContext(), uri)
+            val students = CourseScheduleParser.parseStudentRosterRows(rows)
 
-                        if (selectedCourse?.courseName == effectiveCourseName) {
-                            loadStudentsForCourse(effectiveCourseName)
-                            updateAttendanceSummary()
-                        } else if (selectedCourse == null) {
-                            showCourseSelectionScreen()
-                        }
-
-                        Toast.makeText(requireContext(), "已成功為 [${effectiveCourseName}] 匯入 ${students.size} 位學生名單", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(requireContext(), "學生名單為空或格式無法識別", Toast.LENGTH_LONG).show()
-                    }
-                }
+            if (students.isEmpty()) {
+                Toast.makeText(requireContext(), "檔案內未讀取到有效的學生名單資料，請確認檔案格式", Toast.LENGTH_LONG).show()
+                return
             }
+
+            // 尋找現有課表中是否已存在該課程
+            val existingCourse = currentScheduleList.find { it.courseName.equals(courseName, ignoreCase = true) }
+            val effectiveCourseName = existingCourse?.courseName ?: courseName
+
+            if (existingCourse == null) {
+                val newCourse = ScheduleItem("未指定時段", effectiveCourseName, location)
+                currentScheduleList.add(newCourse)
+            } else if (existingCourse.location.isEmpty() && location.isNotEmpty()) {
+                val index = currentScheduleList.indexOf(existingCourse)
+                currentScheduleList[index] = existingCourse.copy(location = location)
+            }
+
+            val studentStatusList = students.map { StudentStatus(it.id, it.name) }
+                .sortedWith { a, b -> CourseScheduleParser.compareStudentIds(a.id, b.id) }
+            courseStudentsMap[effectiveCourseName] = studentStatusList.toMutableList()
+
+            if (selectedCourse?.courseName == effectiveCourseName) {
+                loadStudentsForCourse(effectiveCourseName)
+                updateAttendanceSummary()
+            } else if (selectedCourse == null) {
+                showCourseSelectionScreen()
+            }
+
+            Toast.makeText(requireContext(), "已成功增加課程 [${effectiveCourseName}] (共 ${students.size} 位學生)", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Toast.makeText(requireContext(), "解析失敗: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "匯入失敗: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun importSchedule(uri: Uri) = handleImport(uri, null)
-    private fun parseScheduleCsv(uri: Uri) = handleImport(uri, null)
+    private fun importSchedule(uri: Uri) = handleImport(uri)
+    private fun parseScheduleCsv(uri: Uri) = handleImport(uri)
 
     @SuppressLint("NotifyDataSetChanged")
     private fun filterStudents(query: String) {
