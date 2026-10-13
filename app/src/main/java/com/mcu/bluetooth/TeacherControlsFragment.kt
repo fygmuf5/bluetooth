@@ -67,6 +67,7 @@ class TeacherControlsFragment : Fragment() {
     private lateinit var layoutStudentGridContainer: View
     private lateinit var etStudentSearch: EditText
     private lateinit var btnSelectAll: Button
+    private lateinit var btnImportStudents: Button
     private lateinit var rvStudentGrid: RecyclerView
 
     // Tab 3: 教室熱力圖
@@ -76,11 +77,16 @@ class TeacherControlsFragment : Fragment() {
     private lateinit var heatmapView: HeatmapView
 
     // --- 資料結構 ---
-    data class ScheduleItem(val period: String, val courseName: String, val location: String = "")
-    data class StudentStatus(val id: String, var isPresent: Boolean = false)
+    data class StudentStatus(val id: String, val name: String = "", var isPresent: Boolean = false) {
+        constructor(id: String, isPresent: Boolean) : this(id, "", isPresent)
+    }
 
     private val currentScheduleList = mutableListOf<ScheduleItem>()
     private var selectedCourse: ScheduleItem? = null
+
+    // 課程自訂學生名單：課程名稱 -> List<StudentStatus>
+    private val courseStudentsMap = mutableMapOf<String, MutableList<StudentStatus>>()
+    private var pendingImportCourse: String? = null
 
     // 各課程紀錄隔離：課程名稱 -> (設備地址 -> Pair(學號, 時間))
     private val courseRecordsMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
@@ -123,9 +129,13 @@ class TeacherControlsFragment : Fragment() {
         }
     }
 
-    private val pickCsvLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    private val pickScheduleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
-            result.data?.data?.let { uri -> parseScheduleCsv(uri) }
+            result.data?.data?.let { uri ->
+                val targetCourse = pendingImportCourse ?: selectedCourse?.courseName
+                pendingImportCourse = null
+                handleImport(uri, targetCourse)
+            }
         }
     }
 
@@ -169,6 +179,7 @@ class TeacherControlsFragment : Fragment() {
         layoutStudentGridContainer = view.findViewById(R.id.layout_student_grid_container)
         etStudentSearch = view.findViewById(R.id.et_student_search)
         btnSelectAll = view.findViewById(R.id.btn_select_all)
+        btnImportStudents = view.findViewById(R.id.btn_import_students)
         rvStudentGrid = view.findViewById(R.id.rv_student_grid)
 
         // Tab 3
@@ -232,7 +243,9 @@ class TeacherControlsFragment : Fragment() {
         courseRecordsMap[course.courseName]?.values?.forEach { (studentId, time) ->
             attendanceResults[studentId] = course.courseName
             val displayTime = if (time.isNotEmpty() && time != "Manual") " ($time)" else ""
-            realtimeDisplayMap[studentId] = "[$studentId] ✅ 點名成功$displayTime"
+            val studentName = allStudentsList.find { it.id == studentId }?.name ?: ""
+            val nameDisplay = if (studentName.isNotEmpty()) "$studentName ($studentId)" else studentId
+            realtimeDisplayMap[studentId] = "[$nameDisplay] ✅ 點名成功$displayTime"
         }
 
         updateAttendanceSummary()
@@ -249,23 +262,35 @@ class TeacherControlsFragment : Fragment() {
 
     private fun loadStudentsForCourse(courseName: String) {
         allStudentsList.clear()
-        val baseList = otpVerifyList?.keys?.toList() ?: listOf("12360615", "12360596", "12360651", "12360305", "12363033")
+        val customStudents = courseStudentsMap[courseName]
         val currentCourseRecords = courseRecordsMap[courseName] ?: emptyMap()
 
-        baseList.forEach { id ->
-            val isChecked = currentCourseRecords.values.any { it.first == id }
-            allStudentsList.add(StudentStatus(id, isChecked))
+        if (!customStudents.isNullOrEmpty()) {
+            customStudents.forEach { s ->
+                val isChecked = currentCourseRecords.values.any { it.first == s.id }
+                allStudentsList.add(StudentStatus(s.id, s.name, isChecked))
+            }
+        } else {
+            val baseList = otpVerifyList?.keys?.toList() ?: listOf("12360615", "12360596", "12360651", "12360305", "12363033")
+            baseList.forEach { id ->
+                val isChecked = currentCourseRecords.values.any { it.first == id }
+                allStudentsList.add(StudentStatus(id, "", isChecked))
+            }
         }
         filterStudents(etStudentSearch.text.toString())
     }
 
     private fun setupListeners() {
         btnImportCsv.setOnClickListener {
-            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                type = "text/*"
-                addCategory(Intent.CATEGORY_OPENABLE)
-            }
-            pickCsvLauncher.launch(Intent.createChooser(intent, "選擇課表 CSV"))
+            pendingImportCourse = null
+            openFilePicker("選擇課程名單或課表 (CSV 或 XLSX)")
+        }
+
+        btnImportStudents.setOnClickListener {
+            val currentName = selectedCourse?.courseName
+            pendingImportCourse = currentName
+            val title = if (!currentName.isNullOrEmpty()) "選擇 [$currentName] 學生名單 (CSV 或 XLSX)" else "選擇學生名單 (CSV 或 XLSX)"
+            openFilePicker(title)
         }
 
         btnBackToSchedule.setOnClickListener {
@@ -411,32 +436,78 @@ class TeacherControlsFragment : Fragment() {
         }
     }
 
-    private fun parseScheduleCsv(uri: Uri) {
+    private fun openFilePicker(title: String) {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf(
+                    "text/csv",
+                    "text/comma-separated-values",
+                    "text/plain",
+                    "application/vnd.ms-excel",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/csv",
+                    "application/octet-stream"
+                )
+            )
+        }
+        pickScheduleLauncher.launch(Intent.createChooser(intent, title))
+    }
+
+    private fun handleImport(uri: Uri, targetCourse: String?) {
         try {
-            requireContext().contentResolver.openInputStream(uri)?.use { inputStream ->
-                BufferedReader(InputStreamReader(inputStream, Charset.forName("UTF-8"))).use { reader ->
-                    currentScheduleList.clear()
-                    reader.readLine()
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        val tokens = line!!.split(",")
-                        if (tokens.size >= 2) {
-                            val period = tokens[0].trim().replace("\"", "")
-                            val course = tokens[1].trim().replace("\"", "")
-                            val loc = if (tokens.size >= 3) tokens[2].trim().replace("\"", "") else ""
-                            if (period.isNotEmpty() && course.isNotEmpty()) {
-                                currentScheduleList.add(ScheduleItem(period, course, loc))
-                            }
+            val result = CourseScheduleParser.parseImport(requireContext(), uri, targetCourse)
+            when (result) {
+                is ParsedImportResult.ScheduleResult -> {
+                    val list = result.scheduleItems
+                    if (list.isNotEmpty()) {
+                        currentScheduleList.clear()
+                        currentScheduleList.addAll(list)
+                        Toast.makeText(requireContext(), "課表名單匯入成功 (共 ${list.size} 門課程)", Toast.LENGTH_SHORT).show()
+                        if (selectedCourse == null) {
+                            showCourseSelectionScreen()
                         }
+                    } else {
+                        Toast.makeText(requireContext(), "未讀取到有效的課程資料，請確認檔案格式", Toast.LENGTH_LONG).show()
                     }
-                    Toast.makeText(requireContext(), "課表匯入成功", Toast.LENGTH_SHORT).show()
-                    if (selectedCourse == null) showCourseSelectionScreen()
+                }
+                is ParsedImportResult.StudentRosterResult -> {
+                    val students = result.students
+                    if (students.isNotEmpty()) {
+                        var course = CourseScheduleParser.findMatchingCourse(currentScheduleList, result.courseName)
+                        val effectiveCourseName = course?.courseName ?: result.courseName
+
+                        if (course == null) {
+                            val newCourse = ScheduleItem("未指定時段", effectiveCourseName, "")
+                            currentScheduleList.add(newCourse)
+                            course = newCourse
+                        }
+
+                        val studentStatusList = students.map { StudentStatus(it.id, it.name) }
+                        courseStudentsMap[effectiveCourseName] = studentStatusList.toMutableList()
+
+                        if (selectedCourse?.courseName == effectiveCourseName) {
+                            loadStudentsForCourse(effectiveCourseName)
+                            updateAttendanceSummary()
+                        } else if (selectedCourse == null) {
+                            showCourseSelectionScreen()
+                        }
+
+                        Toast.makeText(requireContext(), "已成功為 [${effectiveCourseName}] 匯入 ${students.size} 位學生名單", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(requireContext(), "學生名單為空或格式無法識別", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         } catch (e: Exception) {
             Toast.makeText(requireContext(), "解析失敗: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
+
+    private fun importSchedule(uri: Uri) = handleImport(uri, null)
+    private fun parseScheduleCsv(uri: Uri) = handleImport(uri, null)
 
     @SuppressLint("NotifyDataSetChanged")
     private fun filterStudents(query: String) {
@@ -445,8 +516,9 @@ class TeacherControlsFragment : Fragment() {
             filteredStudentsList.addAll(allStudentsList)
         } else {
             val lowerCaseQuery = query.lowercase()
-            allStudentsList.filter { it.id.lowercase().contains(lowerCaseQuery) }
-                .forEach { filteredStudentsList.add(it) }
+            allStudentsList.filter { 
+                it.id.lowercase().contains(lowerCaseQuery) || it.name.lowercase().contains(lowerCaseQuery)
+            }.forEach { filteredStudentsList.add(it) }
         }
         val adapter = rvStudentGrid.adapter
         if (adapter is StudentGridAdapter) {
@@ -655,12 +727,13 @@ class TeacherControlsFragment : Fragment() {
             currentCourseRecords?.remove("Manual_$id")
             currentCourseRecords?.put(address, Pair(id, timeString))
 
-            // 更新即時列表 (若先前有失敗紀錄則取代為成功，並置頂)
+            var student = allStudentsList.find { it.id == id }
+            val studentName = student?.name ?: ""
+            val nameDisplay = if (studentName.isNotEmpty()) "$studentName ($id)" else id
             realtimeDisplayMap.remove(id)
-            realtimeDisplayMap[id] = "[$id] ✅ 點名成功 ($timeString)"
+            realtimeDisplayMap[id] = "[$nameDisplay] ✅ 點名成功 ($timeString)"
             updateListView()
 
-            var student = allStudentsList.find { it.id == id }
             if (student == null) {
                 // 動態加入不在預設名單中的學號，確保點名卡片與即時列表同步顯示
                 student = StudentStatus(id, true)
@@ -748,6 +821,7 @@ class TeacherControlsFragment : Fragment() {
     // --- 學生點名格狀適配器 (畫面二使用) ---
     inner class StudentGridAdapter(private val students: List<StudentStatus>) : RecyclerView.Adapter<StudentGridAdapter.ViewHolder>() {
         inner class ViewHolder(v: View) : RecyclerView.ViewHolder(v) {
+            val tvName: TextView = v.findViewById(R.id.tv_grid_student_name)
             val tvId: TextView = v.findViewById(R.id.tv_grid_student_id)
             val cbStatus: CheckBox = v.findViewById(R.id.cb_attendance_status)
             val cardView: View = v.findViewById(R.id.student_card_view)
@@ -760,6 +834,15 @@ class TeacherControlsFragment : Fragment() {
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             val student = students[position]
             holder.tvId.text = student.id
+            if (student.name.isNotEmpty()) {
+                holder.tvName.text = student.name
+                holder.tvName.visibility = View.VISIBLE
+                holder.tvId.textSize = 10.5f
+            } else {
+                holder.tvName.visibility = View.GONE
+                holder.tvId.textSize = 12f
+            }
+
             holder.cbStatus.setOnCheckedChangeListener(null)
             holder.cbStatus.isChecked = student.isPresent
             updateItemVisual(holder, student.isPresent)
@@ -782,9 +865,11 @@ class TeacherControlsFragment : Fragment() {
             if (isPresent) {
                 holder.cardView.setBackgroundColor(Color.parseColor("#E8F5E9"))
                 holder.tvId.setTextColor(Color.parseColor("#2E7D32"))
+                holder.tvName.setTextColor(Color.parseColor("#1B5E20"))
             } else {
                 holder.cardView.setBackgroundColor(Color.WHITE)
-                holder.tvId.setTextColor(Color.parseColor("#333333"))
+                holder.tvId.setTextColor(Color.parseColor("#757575"))
+                holder.tvName.setTextColor(Color.parseColor("#212121"))
             }
         }
 
