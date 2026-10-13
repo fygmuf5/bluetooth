@@ -197,8 +197,45 @@ class ExampleUnitTest {
 
         val students = CourseScheduleParser.parseStudentRosterRows(rows)
         assertEquals(2, students.size)
-        assertEquals(StudentItem(id = "12360615", name = "王大明", firstName = "大明", lastName = "王"), students[0])
-        assertEquals(StudentItem(id = "12360596", name = "陳小華", firstName = "小華", lastName = "陳"), students[1])
+        // 依學號大小由小到大排序 (12360596 < 12360615)
+        assertEquals(StudentItem(id = "12360596", name = "陳小華", firstName = "小華", lastName = "陳"), students[0])
+        assertEquals(StudentItem(id = "12360615", name = "王大明", firstName = "大明", lastName = "王"), students[1])
+    }
+
+    @Test
+    fun testStudentRosterSortedByStudentId() {
+        val csv = """
+            名字,姓氏,編號,最後一欄未知資訊
+            冠宇,張,12363033,ABC
+            大華,李,12360305,DEF
+            美美,林,12360651,GHI
+            小華,陳,12360596,JKL
+            大明,王,12360615,MNO
+        """.trimIndent()
+
+        val rows = CourseScheduleParser.parseCsv(ByteArrayInputStream(csv.toByteArray(Charsets.UTF_8)))
+        val students = CourseScheduleParser.parseStudentRosterRows(rows)
+
+        assertEquals(5, students.size)
+        val expectedOrder = listOf("12360305", "12360596", "12360615", "12360651", "12363033")
+        assertEquals(expectedOrder, students.map { it.id })
+    }
+
+    @Test
+    fun testCompareStudentIds() {
+        // 數值比較 (非字串字典序：例如 9012 < 10012，若字串字典序則 "10012" < "9012")
+        assertTrue(CourseScheduleParser.compareStudentIds("9012", "10012") < 0)
+        assertTrue(CourseScheduleParser.compareStudentIds("10012", "9012") > 0)
+        assertEquals(0, CourseScheduleParser.compareStudentIds("12360615", "12360615"))
+
+        // 同長度數值學號
+        assertTrue(CourseScheduleParser.compareStudentIds("12360305", "12360596") < 0)
+        assertTrue(CourseScheduleParser.compareStudentIds("12360596", "12360615") < 0)
+        assertTrue(CourseScheduleParser.compareStudentIds("12360615", "12360651") < 0)
+        assertTrue(CourseScheduleParser.compareStudentIds("12360651", "12363033") < 0)
+
+        // 含字母時退回自然字典序比較
+        assertTrue(CourseScheduleParser.compareStudentIds("A123", "B123") < 0)
     }
 
     @Test

@@ -52,7 +52,7 @@
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="匯入名單 (CSV/XLSX)"
+                android:text="匯入課程名單"
                 android:textSize="12sp" />
         </LinearLayout>
 

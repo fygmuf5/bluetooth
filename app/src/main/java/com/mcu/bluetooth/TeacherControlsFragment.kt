@@ -277,13 +277,14 @@ class TeacherControlsFragment : Fragment() {
                 allStudentsList.add(StudentStatus(id, "", isChecked))
             }
         }
+        allStudentsList.sortWith { a, b -> CourseScheduleParser.compareStudentIds(a.id, b.id) }
         filterStudents(etStudentSearch.text.toString())
     }
 
     private fun setupListeners() {
         btnImportCsv.setOnClickListener {
             pendingImportCourse = null
-            openFilePicker("選擇課程名單或課表 (CSV 或 XLSX)")
+            openFilePicker("選擇課程名單 (CSV 或 XLSX)")
         }
 
         btnImportStudents.setOnClickListener {
@@ -486,6 +487,7 @@ class TeacherControlsFragment : Fragment() {
                         }
 
                         val studentStatusList = students.map { StudentStatus(it.id, it.name) }
+                            .sortedWith { a, b -> CourseScheduleParser.compareStudentIds(a.id, b.id) }
                         courseStudentsMap[effectiveCourseName] = studentStatusList.toMutableList()
 
                         if (selectedCourse?.courseName == effectiveCourseName) {
@@ -738,6 +740,7 @@ class TeacherControlsFragment : Fragment() {
                 // 動態加入不在預設名單中的學號，確保點名卡片與即時列表同步顯示
                 student = StudentStatus(id, true)
                 allStudentsList.add(student)
+                allStudentsList.sortWith { a, b -> CourseScheduleParser.compareStudentIds(a.id, b.id) }
                 filterStudents(etStudentSearch.text.toString())
             } else if (!student.isPresent) {
                 student.isPresent = true
