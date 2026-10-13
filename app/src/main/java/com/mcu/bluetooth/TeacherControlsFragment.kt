@@ -25,8 +25,11 @@ import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.tabs.TabLayout
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.nio.charset.Charset
@@ -37,17 +40,29 @@ import java.util.concurrent.atomic.AtomicInteger
 @SuppressLint("MissingPermission")
 class TeacherControlsFragment : Fragment() {
 
+    companion object {
+        val DAYS_OF_WEEK = listOf("週一", "週二", "週三", "週四", "週五", "週六", "週日")
+        val PERIOD_LIST = listOf("01", "02", "03", "04", "20", "05", "06", "07", "08", "09", "40", "50", "60", "70")
+    }
+
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
     private val REFRESH_INTERVAL = 30 * 1000L // 設定為每 30 秒自動向伺服器同步更新一次 XOR 金鑰與 OTP 名單
 
     private val bluetoothAdapter: BluetoothAdapter? get() = (context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
     private val bleScanner: BluetoothLeScanner? get() = bluetoothAdapter?.bluetoothLeScanner
 
-    // --- 畫面一：選擇課程表格 (登入後首頁) ---
+    // --- 畫面一：選擇課程表格 (登入後首頁，水平星期分頁 + 垂直課程時間軸) ---
     private lateinit var layoutCourseSelection: View
-    private lateinit var rvCourseSchedule: RecyclerView
+    private lateinit var tabsWeekDays: TabLayout
+    private lateinit var rvCourseTimeline: RecyclerView
     private lateinit var btnImportCsv: Button
     private lateinit var tvScheduleTitle: TextView
+    private lateinit var tvTimelineSelectionStatus: TextView
+    private lateinit var btnEnterAttendanceFromTimeline: Button
+    private lateinit var cardTimelineActionBar: View
+
+    private var currentSelectedDay = "週一"
+    private val selectedPeriodSlots = mutableSetOf<String>()
 
     // --- 畫面二：課程點名與管理功能介面 ---
     private lateinit var layoutCourseDetail: View
@@ -143,18 +158,22 @@ class TeacherControlsFragment : Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_teacher_controls, container, false)
         initializeViews(view)
-        loadDefaultSchedule()
         setupListeners()
         showCourseSelectionScreen()
+        syncWithServerOnStart()
         return view
     }
 
     private fun initializeViews(view: View) {
         // 畫面一
         layoutCourseSelection = view.findViewById(R.id.layout_course_selection)
-        rvCourseSchedule = view.findViewById(R.id.rv_course_schedule)
+        tabsWeekDays = view.findViewById(R.id.tabs_week_days)
+        rvCourseTimeline = view.findViewById(R.id.rv_course_timeline)
         btnImportCsv = view.findViewById(R.id.btn_import_csv)
         tvScheduleTitle = view.findViewById(R.id.tv_schedule_title)
+        tvTimelineSelectionStatus = view.findViewById(R.id.tv_timeline_selection_status)
+        btnEnterAttendanceFromTimeline = view.findViewById(R.id.btn_enter_attendance_from_timeline)
+        cardTimelineActionBar = view.findViewById(R.id.card_timeline_action_bar)
 
         // 畫面二
         layoutCourseDetail = view.findViewById(R.id.layout_course_detail)
@@ -195,7 +214,7 @@ class TeacherControlsFragment : Fragment() {
     }
 
     /**
-     * 畫面一：僅顯示選擇課程表格 (登入後首頁)
+     * 畫面一：顯示星期分頁與垂直課程時間軸 (登入後首頁)
      */
     private fun showCourseSelectionScreen() {
         stopHeatmapSyncLoop()
@@ -204,10 +223,9 @@ class TeacherControlsFragment : Fragment() {
         layoutCourseSelection.visibility = View.VISIBLE
         layoutCourseDetail.visibility = View.GONE
 
-        rvCourseSchedule.layoutManager = GridLayoutManager(requireContext(), 2)
-        rvCourseSchedule.adapter = CourseScheduleAdapter(currentScheduleList) { course ->
-            enterCourse(course)
-        }
+        setupWeekTabs()
+        updateTimelineForDay(currentSelectedDay)
+        updateSelectionActionBar()
     }
 
     /**
@@ -279,7 +297,38 @@ class TeacherControlsFragment : Fragment() {
 
     private fun setupListeners() {
         btnImportCsv.setOnClickListener {
-            openFilePicker("選擇課程名單 (CSV 或 XLSX)")
+            if (selectedPeriodSlots.isEmpty()) {
+                AlertDialog.Builder(requireContext())
+                    .setTitle("尚未選取時段")
+                    .setMessage("請先在下方課表點選欲排課的時間方格（可多選），再點擊匯入課程。")
+                    .setPositiveButton("確定", null)
+                    .show()
+                return@setOnClickListener
+            }
+            val sorted = selectedPeriodSlots.sortedBy { PERIOD_LIST.indexOf(it) }
+            val periodDesc = if (sorted.size == 1) sorted.first() else "${sorted.first()}-${sorted.last()}"
+            openFilePicker("匯入 [${currentSelectedDay} $periodDesc] 課程檔案 (CSV 或 XLSX)")
+        }
+
+        btnEnterAttendanceFromTimeline.setOnClickListener {
+            if (selectedPeriodSlots.isEmpty()) {
+                Toast.makeText(requireContext(), "請先選取要進入點名的課程時段", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // 檢查選取的方格中是否有任何一個是空白課程
+            val coursesInSelected = selectedPeriodSlots.map { slot ->
+                findCourseForSlot(currentSelectedDay, slot)
+            }
+
+            if (coursesInSelected.any { it == null }) {
+                Toast.makeText(requireContext(), "選取包含空白課程，需先匯入課程！", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+
+            // 所有選取時段皆已有課程，進入點名介面
+            val targetCourse = coursesInSelected.filterNotNull().first()
+            enterCourse(targetCourse)
         }
 
         btnBackToSchedule.setOnClickListener {
@@ -462,30 +511,44 @@ class TeacherControlsFragment : Fragment() {
                 return
             }
 
-            // 尋找現有課表中是否已存在該課程
-            val existingCourse = currentScheduleList.find { it.courseName.equals(courseName, ignoreCase = true) }
-            val effectiveCourseName = existingCourse?.courseName ?: courseName
-
-            if (existingCourse == null) {
-                val newCourse = ScheduleItem("未指定時段", effectiveCourseName, location)
-                currentScheduleList.add(newCourse)
-            } else if (existingCourse.location.isEmpty() && location.isNotEmpty()) {
-                val index = currentScheduleList.indexOf(existingCourse)
-                currentScheduleList[index] = existingCourse.copy(location = location)
+            // 根據當前選取之時段格式化 Period
+            val targetPeriod = if (selectedPeriodSlots.isNotEmpty()) {
+                val sorted = selectedPeriodSlots.sortedBy { PERIOD_LIST.indexOf(it) }
+                val periodDesc = if (sorted.size == 1) sorted.first() else "${sorted.first()}-${sorted.last()}"
+                "${currentSelectedDay} $periodDesc"
+            } else {
+                "${currentSelectedDay} 未指定時段"
             }
+
+            // 移除同日同選取時段上的舊項目 (避免覆蓋重疊衝突)
+            if (selectedPeriodSlots.isNotEmpty()) {
+                val toRemove = currentScheduleList.filter { item ->
+                    val (itemDay, itemPeriods) = parseScheduleItemPeriods(item.period)
+                    itemDay == currentSelectedDay && itemPeriods.any { selectedPeriodSlots.contains(it) }
+                }
+                currentScheduleList.removeAll(toRemove)
+            }
+
+            // 加入新課程
+            val newCourse = ScheduleItem(targetPeriod, courseName, location)
+            currentScheduleList.add(newCourse)
 
             val studentStatusList = students.map { StudentStatus(it.id, it.name) }
                 .sortedWith { a, b -> CourseScheduleParser.compareStudentIds(a.id, b.id) }
-            courseStudentsMap[effectiveCourseName] = studentStatusList.toMutableList()
+            courseStudentsMap[courseName] = studentStatusList.toMutableList()
 
-            if (selectedCourse?.courseName == effectiveCourseName) {
-                loadStudentsForCourse(effectiveCourseName)
-                updateAttendanceSummary()
-            } else if (selectedCourse == null) {
-                showCourseSelectionScreen()
-            }
+            // 1. 同步儲存至本機快取
+            saveScheduleToLocal()
 
-            Toast.makeText(requireContext(), "已成功增加課程 [${effectiveCourseName}] (共 ${students.size} 位學生)", Toast.LENGTH_SHORT).show()
+            // 2. 同步至伺服器
+            syncScheduleToServer()
+
+            // 3. 重新整理畫面
+            selectedPeriodSlots.clear()
+            updateTimelineForDay(currentSelectedDay)
+            updateSelectionActionBar()
+
+            Toast.makeText(requireContext(), "已成功為 [${targetPeriod}] 匯入課程 [${courseName}] (共 ${students.size} 位學生)", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(requireContext(), "匯入失敗: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -775,33 +838,349 @@ class TeacherControlsFragment : Fragment() {
         try { bleScanner?.stopScan(scanCallback) } catch (e: Exception) {}
     }
 
-    // --- 課表清單適配器 (畫面一使用) ---
-    inner class CourseScheduleAdapter(
-        private val items: List<ScheduleItem>,
-        private val onItemClick: (ScheduleItem) -> Unit
-    ) : RecyclerView.Adapter<CourseScheduleAdapter.ViewHolder>() {
+    private fun dpToPx(dp: Int): Int {
+        val density = context?.resources?.displayMetrics?.density ?: 1f
+        return (dp * density).toInt()
+    }
+
+    private fun getPeriodDescription(period: String): String {
+        return when (period) {
+            "20" -> "午休/班會"
+            "01", "02", "03", "04" -> "上午"
+            "05", "06", "07", "08", "09" -> "下午"
+            "40", "50", "60", "70" -> "夜間"
+            else -> "節次"
+        }
+    }
+
+    /**
+     * 解析排課時段字串 (例如 "週二 05-07" -> Pair("週二", setOf("05", "06", "07")))
+     */
+    fun parseScheduleItemPeriods(itemPeriod: String): Pair<String, Set<String>> {
+        val normalized = itemPeriod.trim()
+            .replace("星期", "週")
+            .replace("禮拜", "週")
+
+        val day = DAYS_OF_WEEK.find { normalized.startsWith(it) } ?: ""
+        if (day.isEmpty()) return Pair("", emptySet())
+
+        val timePart = normalized.removePrefix(day).trim()
+        val periods = mutableSetOf<String>()
+
+        if (timePart.contains("-")) {
+            val parts = timePart.split("-").map { it.trim() }
+            val start = parts.getOrNull(0) ?: ""
+            val end = parts.getOrNull(1) ?: ""
+            val sIdx = PERIOD_LIST.indexOf(start)
+            val eIdx = PERIOD_LIST.indexOf(end)
+            if (sIdx != -1 && eIdx != -1 && sIdx <= eIdx) {
+                periods.addAll(PERIOD_LIST.subList(sIdx, eIdx + 1))
+            }
+        } else {
+            timePart.split(",", " ", "、").map { it.trim() }.forEach { p ->
+                if (PERIOD_LIST.contains(p)) {
+                    periods.add(p)
+                }
+            }
+        }
+
+        if (periods.isEmpty() && PERIOD_LIST.contains(timePart)) {
+            periods.add(timePart)
+        }
+
+        return Pair(day, periods)
+    }
+
+    /**
+     * 尋找指定星期與節次之排課項目
+     */
+    fun findCourseForSlot(day: String, period: String): ScheduleItem? {
+        for (item in currentScheduleList) {
+            val (itemDay, itemPeriods) = parseScheduleItemPeriods(item.period)
+            if (itemDay == day && itemPeriods.contains(period)) {
+                return item
+            }
+        }
+        return null
+    }
+
+    private fun setupWeekTabs() {
+        if (tabsWeekDays.tabCount > 0) return
+        DAYS_OF_WEEK.forEach { day ->
+            val tab = tabsWeekDays.newTab().setText(day)
+            tabsWeekDays.addTab(tab)
+        }
+
+        tabsWeekDays.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                val position = tab?.position ?: 0
+                if (position in DAYS_OF_WEEK.indices) {
+                    currentSelectedDay = DAYS_OF_WEEK[position]
+                    selectedPeriodSlots.clear()
+                    updateTimelineForDay(currentSelectedDay)
+                    updateSelectionActionBar()
+                }
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
+        })
+
+        // 預設選取今天星期幾
+        val calendar = Calendar.getInstance()
+        val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
+        val defaultIndex = when (dayOfWeek) {
+            Calendar.MONDAY -> 0
+            Calendar.TUESDAY -> 1
+            Calendar.WEDNESDAY -> 2
+            Calendar.THURSDAY -> 3
+            Calendar.FRIDAY -> 4
+            Calendar.SATURDAY -> 5
+            Calendar.SUNDAY -> 6
+            else -> 0
+        }
+        tabsWeekDays.getTabAt(defaultIndex)?.select()
+        currentSelectedDay = DAYS_OF_WEEK[defaultIndex]
+    }
+
+    private fun updateTimelineForDay(day: String) {
+        rvCourseTimeline.layoutManager = LinearLayoutManager(requireContext())
+        rvCourseTimeline.adapter = CourseTimelineAdapter(PERIOD_LIST, day)
+    }
+
+    private fun updateSelectionActionBar() {
+        if (selectedPeriodSlots.isEmpty()) {
+            tvTimelineSelectionStatus.text = "點選時段方格可多選排課或進入點名"
+            btnEnterAttendanceFromTimeline.isEnabled = false
+            btnEnterAttendanceFromTimeline.alpha = 0.5f
+        } else {
+            val sorted = selectedPeriodSlots.sortedBy { PERIOD_LIST.indexOf(it) }
+            val slotText = sorted.joinToString(", ")
+            val hasEmpty = selectedPeriodSlots.any { findCourseForSlot(currentSelectedDay, it) == null }
+            val statusNote = if (hasEmpty) " (含空白課程)" else " (已排課)"
+            tvTimelineSelectionStatus.text = "已選 [${currentSelectedDay}] ${selectedPeriodSlots.size} 節：$slotText$statusNote"
+            btnEnterAttendanceFromTimeline.isEnabled = true
+            btnEnterAttendanceFromTimeline.alpha = 1.0f
+        }
+    }
+
+    private fun getTeacherEmail(): String {
+        val intentEmail = activity?.intent?.getStringExtra("EXTRA_EMAIL")
+        if (!intentEmail.isNullOrEmpty()) return intentEmail
+        val sharedPref = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
+        return sharedPref.getString("saved_email", "") ?: "teacher@example.com"
+    }
+
+    private fun serializeScheduleToJson(): String {
+        val array = JSONArray()
+        for (item in currentScheduleList) {
+            val obj = JSONObject()
+            obj.put("period", item.period)
+            obj.put("course_name", item.courseName)
+            obj.put("location", item.location)
+            array.put(obj)
+        }
+        return array.toString()
+    }
+
+    private fun serializeStudentsToJson(): String {
+        val root = JSONObject()
+        for ((courseName, students) in courseStudentsMap) {
+            val arr = JSONArray()
+            for (s in students) {
+                val sObj = JSONObject()
+                sObj.put("id", s.id)
+                sObj.put("name", s.name)
+                arr.put(sObj)
+            }
+            root.put(courseName, arr)
+        }
+        return root.toString()
+    }
+
+    private fun deserializeScheduleFromJson(jsonStr: String) {
+        if (jsonStr.isBlank()) return
+        try {
+            val array = JSONArray(jsonStr)
+            currentScheduleList.clear()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val period = obj.optString("period")
+                val name = obj.optString("course_name")
+                val loc = obj.optString("location")
+                currentScheduleList.add(ScheduleItem(period, name, loc))
+            }
+        } catch (e: Exception) {
+            Log.e("TeacherControls", "課表還原失敗: ${e.message}")
+        }
+    }
+
+    private fun deserializeStudentsFromJson(jsonStr: String) {
+        if (jsonStr.isBlank()) return
+        try {
+            val root = JSONObject(jsonStr)
+            courseStudentsMap.clear()
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val course = keys.next()
+                val arr = root.optJSONArray(course) ?: continue
+                val list = mutableListOf<StudentStatus>()
+                for (i in 0 until arr.length()) {
+                    val sObj = arr.getJSONObject(i)
+                    val id = sObj.optString("id")
+                    val name = sObj.optString("name")
+                    list.add(StudentStatus(id, name))
+                }
+                courseStudentsMap[course] = list
+            }
+        } catch (e: Exception) {
+            Log.e("TeacherControls", "學生名單還原失敗: ${e.message}")
+        }
+    }
+
+    private fun saveScheduleToLocal() {
+        val email = getTeacherEmail()
+        val sharedPref = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
+        sharedPref.edit()
+            .putString("saved_schedule_$email", serializeScheduleToJson())
+            .putString("saved_students_$email", serializeStudentsToJson())
+            .apply()
+    }
+
+    private fun loadScheduleFromLocal(): Boolean {
+        val email = getTeacherEmail()
+        val sharedPref = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
+        val schedJson = sharedPref.getString("saved_schedule_$email", null)
+        val studJson = sharedPref.getString("saved_students_$email", null)
+
+        if (!schedJson.isNullOrEmpty()) {
+            deserializeScheduleFromJson(schedJson)
+            if (!studJson.isNullOrEmpty()) {
+                deserializeStudentsFromJson(studJson)
+            }
+            return true
+        }
+        return false
+    }
+
+    private fun syncScheduleToServer() {
+        val email = getTeacherEmail()
+        if (email.isEmpty()) return
+        val scheduleJson = serializeScheduleToJson()
+        val studentsJson = serializeStudentsToJson()
+        NetworkManager.syncTeacherSchedule(email, scheduleJson, studentsJson) { success ->
+            activity?.runOnUiThread {
+                if (success) {
+                    Log.d("TeacherControls", "課表與名單已成功同步至伺服器")
+                } else {
+                    Log.w("TeacherControls", "伺服器同步失敗，已儲存於本機快取")
+                }
+            }
+        }
+    }
+
+    private fun syncWithServerOnStart() {
+        val email = getTeacherEmail()
+
+        // 1. 先從本機快取載入，若無儲存則載入預設課表
+        val hasLocal = loadScheduleFromLocal()
+        if (!hasLocal && currentScheduleList.isEmpty()) {
+            loadDefaultSchedule()
+        }
+        updateTimelineForDay(currentSelectedDay)
+
+        // 2. 向伺服器拉取最新課表
+        if (email.isNotEmpty()) {
+            NetworkManager.getTeacherSchedule(email) { response ->
+                if (response != null && isAdded) {
+                    val sched = response.optString("schedule", "")
+                    val stud = response.optString("students", "")
+                    if (sched.isNotEmpty()) {
+                        activity?.runOnUiThread {
+                            deserializeScheduleFromJson(sched)
+                            if (stud.isNotEmpty()) {
+                                deserializeStudentsFromJson(stud)
+                            }
+                            saveScheduleToLocal()
+                            updateTimelineForDay(currentSelectedDay)
+                            Toast.makeText(requireContext(), "已從伺服器同步課表", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 垂直課程時間軸適配器 (畫面一使用，寬度比例 1:3，支援多選藍底標示) ---
+    inner class CourseTimelineAdapter(
+        private val periods: List<String>,
+        private val day: String
+    ) : RecyclerView.Adapter<CourseTimelineAdapter.ViewHolder>() {
 
         inner class ViewHolder(v: View) : RecyclerView.ViewHolder(v) {
-            val tvPeriod: TextView = v.findViewById(R.id.tv_course_period)
-            val tvCourseName: TextView = v.findViewById(R.id.tv_course_name)
-            val tvLocation: TextView = v.findViewById(R.id.tv_course_location)
-            val cardView: View = v.findViewById(R.id.card_course_item)
+            val tvPeriodNumber: TextView = v.findViewById(R.id.tv_period_number)
+            val tvPeriodDesc: TextView = v.findViewById(R.id.tv_period_desc)
+            val cardPeriodLabel: View = v.findViewById(R.id.card_period_label)
+            val cardCourseCell: com.google.android.material.card.MaterialCardView = v.findViewById(R.id.card_course_cell)
+            val tvCellCourseName: TextView = v.findViewById(R.id.tv_cell_course_name)
+            val tvCellCourseInfo: TextView = v.findViewById(R.id.tv_cell_course_info)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_course_schedule, parent, false)
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_schedule_timeline_row, parent, false)
             return ViewHolder(view)
         }
 
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-            val item = items[position]
-            holder.tvPeriod.text = item.period
-            holder.tvCourseName.text = item.courseName
-            holder.tvLocation.text = if (item.location.isNotEmpty()) "教室: ${item.location}" else "未指定教室"
-            holder.cardView.setOnClickListener { onItemClick(item) }
+            val period = periods[position]
+            holder.tvPeriodNumber.text = period
+            holder.tvPeriodDesc.text = getPeriodDescription(period)
+
+            val course = findCourseForSlot(day, period)
+            val isSelected = selectedPeriodSlots.contains(period)
+
+            if (course != null) {
+                holder.tvCellCourseName.text = course.courseName
+                holder.tvCellCourseInfo.text = if (course.location.isNotEmpty()) "教室: ${course.location}" else "已排課"
+            } else {
+                holder.tvCellCourseName.text = "空白課程"
+                holder.tvCellCourseInfo.text = "未排課 (點選可選取)"
+            }
+
+            if (isSelected) {
+                // 選取時藍底標示
+                holder.cardCourseCell.setCardBackgroundColor(Color.parseColor("#E3F2FD"))
+                holder.cardCourseCell.strokeColor = Color.parseColor("#1976D2")
+                holder.cardCourseCell.strokeWidth = dpToPx(2)
+                holder.tvCellCourseName.setTextColor(Color.parseColor("#0D47A1"))
+                holder.tvCellCourseInfo.setTextColor(Color.parseColor("#1565C0"))
+            } else {
+                if (course != null) {
+                    holder.cardCourseCell.setCardBackgroundColor(Color.WHITE)
+                    holder.cardCourseCell.strokeColor = Color.parseColor("#90CAF9")
+                    holder.cardCourseCell.strokeWidth = dpToPx(1)
+                    holder.tvCellCourseName.setTextColor(Color.parseColor("#212121"))
+                    holder.tvCellCourseInfo.setTextColor(Color.parseColor("#1976D2"))
+                } else {
+                    holder.cardCourseCell.setCardBackgroundColor(Color.parseColor("#FAFAFA"))
+                    holder.cardCourseCell.strokeColor = Color.parseColor("#E0E0E0")
+                    holder.cardCourseCell.strokeWidth = dpToPx(1)
+                    holder.tvCellCourseName.setTextColor(Color.parseColor("#9E9E9E"))
+                    holder.tvCellCourseInfo.setTextColor(Color.parseColor("#BDBDBD"))
+                }
+            }
+
+            holder.cardCourseCell.setOnClickListener {
+                if (selectedPeriodSlots.contains(period)) {
+                    selectedPeriodSlots.remove(period)
+                } else {
+                    selectedPeriodSlots.add(period)
+                }
+                notifyItemChanged(position)
+                updateSelectionActionBar()
+            }
         }
 
-        override fun getItemCount() = items.size
+        override fun getItemCount() = periods.size
     }
 
     // --- 學生點名格狀適配器 (畫面二使用) ---

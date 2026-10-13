@@ -34,10 +34,15 @@ object NetworkManager {
     // 點名 Session 相關 API 路徑
     private const val PATH_START_SESSION = "/api/session/start"     // 老師發起點名 Session
     private const val PATH_GET_OTP_LIST  = "/api/session/otp-list"   // 老師取得全班 OTP 驗證名單
-    private const val PATH_GET_MY_TOKEN  = "/api/session/get-token"  // 學生取得個人專屬 OTP 與 XOR Key// 教室熱力圖與定位相關 API 路徑
+    private const val PATH_GET_MY_TOKEN  = "/api/session/get-token"  // 學生取得個人專屬 OTP 與 XOR Key
+    // 教室熱力圖與定位相關 API 路徑
     private const val PATH_UPLOAD_COORDS = "/api/coords"        // 上傳學生座標 (定位計算 -> 伺服器)
     private const val PATH_GET_COORDS    = "/api/coords/get"    // 取得所有學生定位座標
     private const val PATH_CLEAR_COORDS  = "/api/coords/clear"  // 清除本次點名的定位紀錄
+
+    // 課表同步 API 路徑
+    private const val PATH_SYNC_SCHEDULE = "/api/teacher/schedule/sync" // 老師同步課表至伺服器
+    private const val PATH_GET_SCHEDULE  = "/api/teacher/schedule/get"  // 老師從伺服器取得課表
 
     // 網路連線逾時時間設定 (毫秒)
     private const val TIMEOUT_MS = 5000
@@ -277,6 +282,45 @@ object NetworkManager {
                 callback(false, 0)
             }
         }
+    }
+
+    /**
+     * 11. 老師端同步課表與學生名單至伺服器
+     * @param email 老師 Email
+     * @param scheduleJson 課表 JSON 字串
+     * @param studentsJson 學生名單 JSON 字串
+     * @param callback 回傳是否成功同步
+     */
+    fun syncTeacherSchedule(
+        email: String,
+        scheduleJson: String,
+        studentsJson: String,
+        callback: (Boolean) -> Unit
+    ) {
+        val json = JSONObject().apply {
+            put("email", email)
+            put("schedule", scheduleJson)
+            put("students", studentsJson)
+        }
+        sendJsonPostWithResponse(BASE_URL + PATH_SYNC_SCHEDULE, json) { response ->
+            val success = response != null && (response.optBoolean("success", false) || response.optString("status", "") == "ok")
+            callback(success)
+        }
+    }
+
+    /**
+     * 12. 老師端向伺服器拉取最新課表與名單
+     * @param email 老師 Email
+     * @param callback 回傳伺服器 JSON 結果 (包含 schedule 與 students 欄位)
+     */
+    fun getTeacherSchedule(
+        email: String,
+        callback: (JSONObject?) -> Unit
+    ) {
+        val json = JSONObject().apply {
+            put("email", email)
+        }
+        sendJsonPostWithResponse(BASE_URL + PATH_GET_SCHEDULE, json, callback)
     }
 
     /**

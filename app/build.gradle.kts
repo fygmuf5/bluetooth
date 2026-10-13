@@ -11,8 +11,8 @@ android {
         applicationId = "com.mcu.bluetooth"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 61
+        versionName = "v6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
