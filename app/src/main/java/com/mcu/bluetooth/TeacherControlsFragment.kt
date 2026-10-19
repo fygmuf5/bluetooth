@@ -46,7 +46,6 @@ class TeacherControlsFragment : Fragment() {
     }
 
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    private val REFRESH_INTERVAL = 30 * 1000L // 設定為每 30 秒自動向伺服器同步更新一次 XOR 金鑰與 OTP 名單
 
     private val bluetoothAdapter: BluetoothAdapter? get() = (context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
     private val bleScanner: BluetoothLeScanner? get() = bluetoothAdapter?.bluetoothLeScanner
@@ -131,16 +130,7 @@ class TeacherControlsFragment : Fragment() {
         }
     }
 
-    // 點名週期輪詢
     private val handler = Handler(Looper.getMainLooper())
-    private val refreshRunnable = object : Runnable {
-        override fun run() {
-            if (isScanning) {
-                performSessionRefresh()
-                handler.postDelayed(this, REFRESH_INTERVAL)
-            }
-        }
-    }
 
     private val pickScheduleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
@@ -621,7 +611,6 @@ class TeacherControlsFragment : Fragment() {
         updateListView()
         updateAttendanceSummary()
         performSessionRefresh()
-        handler.postDelayed(refreshRunnable, REFRESH_INTERVAL)
 
         // 兼容不同硬體晶片：同時提供 ServiceData 與 ServiceUuid 過濾器 (OR 關係)
         val filterData = ScanFilter.Builder().setServiceData(ParcelUuid(SERVICE_UUID), null).build()
@@ -637,7 +626,7 @@ class TeacherControlsFragment : Fragment() {
 
     private fun performSessionRefresh() {
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
-        tvTeacherStatus.text = "正在同步伺服器點名訊號..."
+        tvTeacherStatus.text = "正在向伺服器取得點名金鑰與OTP名單..."
         NetworkManager.startAttendanceSession(email) { xorKey ->
             activity?.runOnUiThread {
                 if (!xorKey.isNullOrEmpty()) {
@@ -646,11 +635,12 @@ class TeacherControlsFragment : Fragment() {
                         activity?.runOnUiThread {
                             otpVerifyList = list
                             selectedCourse?.courseName?.let { loadStudentsForCourse(it) }
-                            tvTeacherStatus.text = "✅ 點名循環中 (${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())})"
+                            val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                            tvTeacherStatus.text = "✅ 點名進行中 ($timeStr 已取得密鑰與名單)"
                         }
                     }
                 } else {
-                    tvTeacherStatus.text = "❌ 同步密鑰失敗，請檢查網路連線"
+                    tvTeacherStatus.text = "❌ 取得密鑰失敗，請檢查網路連線"
                 }
             }
         }
@@ -658,7 +648,8 @@ class TeacherControlsFragment : Fragment() {
 
     private fun stopAttendanceAndUpload() {
         isScanning = false
-        handler.removeCallbacks(refreshRunnable)
+        currentXorKey = null
+        otpVerifyList = null
         try { bleScanner?.stopScan(scanCallback) } catch (e: Exception) {}
         btnAttendanceToggle.text = "開始點名"
         btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#4CAF50"))
@@ -833,7 +824,7 @@ class TeacherControlsFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        handler.removeCallbacks(refreshRunnable)
+        handler.removeCallbacksAndMessages(null)
         stopHeatmapSyncLoop()
         try { bleScanner?.stopScan(scanCallback) } catch (e: Exception) {}
     }

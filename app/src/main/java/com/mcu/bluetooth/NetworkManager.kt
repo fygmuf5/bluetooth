@@ -66,7 +66,7 @@ object NetworkManager {
 
     /**
      * 2. 老師端取得全班 OTP 驗證對照名單
-     * 點名期間老師端每 30 秒呼叫一次，取得全班各學號當前對應的 OTP，用於解密 BLE 藍牙廣播後進行比對。
+     * 點名開始時呼叫一次，取得全班各學號當前對應的 OTP，用於解密 BLE 藍牙廣播後進行比對。
      * @param email 老師 Email
      * @param callback 回傳 <學號, OTP> 映射 Map (若無資料則回傳 null)
      */
@@ -94,7 +94,7 @@ object NetworkManager {
 
     /**
      * 3. 學生端取得個人專屬 OTP 與 XOR 加密金鑰
-     * 學生端每 30 秒自動向伺服器請求一次，取得屬於該學號當前的 OTP 權杖與加密金鑰後廣播。
+     * 學生端按下簽到按鈕時向伺服器請求一次，取得屬於該學號當前的 OTP 權杖與加密金鑰後廣播。
      * @param studentId 學生學號
      * @param callback 回傳 (otp, xorKey)
      */

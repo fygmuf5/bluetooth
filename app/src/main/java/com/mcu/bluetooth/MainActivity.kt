@@ -25,9 +25,9 @@ import java.util.*
  * 負責根據使用者角色 (STUDENT 學生 / TEACHER 教師) 分分流顯示介面：
  * 
  * 1. 學生端功能 (STUDENT)：
- *    - 背景每 30 秒自動向伺服器請求專屬 OTP 權杖與 XOR 金鑰
+ *    - 點擊按鈕向伺服器請求一次當前的 OTP 權杖與 XOR 金鑰
  *    - 將 `student_id|otp` 以 XOR 加密後，透過 BLE 藍牙廣播 (BluetoothLeAdvertiser) 發送打卡訊號
- *    - 提供手動立即簽到按鈕與即時狀態顯示 (包含當前 OTP 與更新時間)
+ *    - 提供單次立即簽到按鈕與即時狀態顯示 (包含當前 OTP 與發送時間)
  * 
  * 2. 教師端功能 (TEACHER)：
  *    - 載入並嵌入 TeacherControlsFragment，展示課程選擇、點名管理及教室熱力圖
@@ -37,8 +37,6 @@ class MainActivity : AppCompatActivity() {
 
     // 藍牙廣播 Service UUID (必須與老師端掃描過濾 UUID 完全一致)
     private val SERVICE_UUID: UUID = UUID.fromString("00001111-0000-1000-8000-00805F9B34FB")
-    // 學生端自動請求 OTP 與發送廣播的週期 (每 30 秒)
-    private val AUTO_REFRESH_INTERVAL = 30 * 1000L
 
     // 藍牙系統服務與廣播器宣告
     private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
@@ -61,23 +59,15 @@ class MainActivity : AppCompatActivity() {
     private var userEmail: String? = null
     private var studentId: String = ""
 
-    // 學生端 30 秒輪詢定時器 (Handler + Runnable)
+    // 主執行緒 Handler
     private val handler = Handler(Looper.getMainLooper())
-    private val autoAttendanceRunnable = object : Runnable {
-        override fun run() {
-            if (currentRole == "STUDENT") {
-                startAutomaticAttendance()
-                handler.postDelayed(this, AUTO_REFRESH_INTERVAL) // 30 秒後自動重複執行
-            }
-        }
-    }
 
     // Android 12+ 藍牙與定位權限請求合約
     private val requestBluetoothPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
         if (perms.values.all { it }) {
-            startAutomaticAttendance()
+            sendAttendanceBroadcast()
         } else {
-            Toast.makeText(this, "未取得權限，自動點名無法運作", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "未取得藍牙或定位權限，無法發送簽到訊號", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -94,11 +84,6 @@ class MainActivity : AppCompatActivity() {
         initializeUI()
         setupRoleUI()
         setupListeners()
-
-        // 若為學生身分，自動啟動背景點名輪詢
-        if (currentRole == "STUDENT") {
-            checkAndStartAutoAttendance()
-        }
     }
 
     /**
@@ -112,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         studentCard = findViewById(R.id.student_card)
         teacherContainer = findViewById(R.id.teacher_container)
         
-        broadcastButton.text = "手動立即簽到"
+        broadcastButton.text = "立即簽到"
     }
 
     /**
@@ -136,7 +121,7 @@ class MainActivity : AppCompatActivity() {
                 teacherContainer.visibility = View.GONE
                 studentCard.visibility = View.VISIBLE
                 findViewById<View>(R.id.status_card).visibility = View.VISIBLE
-                statusTextView.text = "身份: 學生 (背景自動點名中)"
+                statusTextView.text = "身份: 學生 (請點擊按鈕進行簽到)"
                 studentIdTextView.text = "學號 : $studentId"
             }
             else -> {
@@ -151,14 +136,14 @@ class MainActivity : AppCompatActivity() {
      * 3. 設定按鈕點擊監聽器
      */
     private fun setupListeners() {
-        // 手動簽到按鈕：按下後觸發即時簽到廣播
+        // 學生簽到按鈕：按下後只向伺服器求取一次當時的 OTP 與 key，並加密廣播傳出
         broadcastButton.setOnClickListener { 
             // 按鈕防抖：防止 2 秒內快速連點導致廣播實例衝突
             broadcastButton.isEnabled = false
             handler.postDelayed({ broadcastButton.isEnabled = true }, 2000)
 
             if (hasRequiredBluetoothPermissions()) {
-                startAutomaticAttendance()
+                sendAttendanceBroadcast()
             } else {
                 requestBluetoothPermissions.launch(getRequiredBluetoothPermissions())
             }
@@ -171,22 +156,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 檢查權限並啟動學生背景自動點名
+     * 4. 學生端核心點名流程：按一次按鈕，向伺服器請求一次當前的 OTP 與 XOR Key，並加密發送 BLE 廣播
      */
-    private fun checkAndStartAutoAttendance() {
-        if (hasRequiredBluetoothPermissions()) {
-            handler.post(autoAttendanceRunnable)
-        } else {
-            requestBluetoothPermissions.launch(getRequiredBluetoothPermissions())
-        }
-    }
-
-    /**
-     * 4. 學生端核心點名流程：向伺服器請求 Token/XOR Key 並發送 BLE 廣播
-     */
-    private fun startAutomaticAttendance() {
+    private fun sendAttendanceBroadcast() {
         val cleanStudentId = studentId.substringBefore("@").trim()
-        if (cleanStudentId.isEmpty() || cleanStudentId == "Unknown") return
+        if (cleanStudentId.isEmpty() || cleanStudentId == "Unknown") {
+            Toast.makeText(this, "無效的學號資訊", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         // 藍牙狀態防呆檢查
         if (bluetoothAdapter == null) {
@@ -207,19 +184,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         val timeNow = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        statusTextView.text = "狀態: 正在同步權杖 ($timeNow)..."
+        statusTextView.text = "狀態: 正在向伺服器取得權杖與金鑰 ($timeNow)..."
 
-        // 向伺服器讀取所屬學號當前 30 秒有效之 OTP 與 XOR 金鑰
+        // 按一次按鈕，只向伺服器端求取一次當時的 OTP 跟 key，並加密傳出去
         NetworkManager.getStudentToken(cleanStudentId) { otp, xorKey ->
             runOnUiThread {
                 val updateTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                 if (!otp.isNullOrEmpty() && !xorKey.isNullOrEmpty()) {
                     // 對學號與 OTP 進行 XOR 加密並發送 BLE 廣播
                     broadcastEncryptedMessage(cleanStudentId, otp, xorKey)
-                    // 更新 UI 狀態欄，清楚標示當前 OTP 與更新時間
-                    statusTextView.text = "狀態: 自動廣播中\n學號: $cleanStudentId | OTP: $otp\n更新時間: $updateTime (每30秒自動更新)"
+                    // 更新 UI 狀態欄，清楚標示當前 OTP 與發送時間
+                    statusTextView.text = "狀態: 廣播簽到訊號中\n學號: $cleanStudentId | OTP: $otp\n發送時間: $updateTime"
+                    Toast.makeText(this, "已發送簽到訊號 (OTP: $otp)", Toast.LENGTH_SHORT).show()
                 } else {
-                    statusTextView.text = "狀態: 目前無點名活動 ($updateTime)"
+                    statusTextView.text = "狀態: 目前無進行中的點名活動 ($updateTime)"
+                    Toast.makeText(this, "目前無進行中的點名活動或無法取得權杖", Toast.LENGTH_SHORT).show()
                     stopBleAdvertising()
                 }
             }
@@ -254,7 +233,7 @@ class MainActivity : AppCompatActivity() {
      * 6. 登出系統：停止定時器與藍牙廣播，清除本機 SharedPreferences 快取並返回登入頁
      */
     private fun logout() {
-        handler.removeCallbacks(autoAttendanceRunnable)
+        handler.removeCallbacksAndMessages(null)
         stopBleAdvertising()
 
         val sharedPref = getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
@@ -366,7 +345,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         // Activity 銷毀時停止定時任務與藍牙廣播，避免記憶體洩漏
-        handler.removeCallbacks(autoAttendanceRunnable)
+        handler.removeCallbacksAndMessages(null)
         stopBleAdvertising()
     }
 
