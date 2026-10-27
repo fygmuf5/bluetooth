@@ -54,6 +54,7 @@ class TeacherControlsFragment : Fragment() {
     private lateinit var layoutCourseSelection: View
     private lateinit var tabsWeekDays: TabLayout
     private lateinit var rvCourseTimeline: RecyclerView
+    private lateinit var btnDeleteCourse: Button
     private lateinit var btnImportCsv: Button
     private lateinit var tvScheduleTitle: TextView
     private lateinit var tvTimelineSelectionStatus: TextView
@@ -159,6 +160,7 @@ class TeacherControlsFragment : Fragment() {
         layoutCourseSelection = view.findViewById(R.id.layout_course_selection)
         tabsWeekDays = view.findViewById(R.id.tabs_week_days)
         rvCourseTimeline = view.findViewById(R.id.rv_course_timeline)
+        btnDeleteCourse = view.findViewById(R.id.btn_delete_course)
         btnImportCsv = view.findViewById(R.id.btn_import_csv)
         tvScheduleTitle = view.findViewById(R.id.tv_schedule_title)
         tvTimelineSelectionStatus = view.findViewById(R.id.tv_timeline_selection_status)
@@ -286,6 +288,47 @@ class TeacherControlsFragment : Fragment() {
     }
 
     private fun setupListeners() {
+        btnDeleteCourse.setOnClickListener {
+            if (selectedPeriodSlots.isEmpty()) {
+                Toast.makeText(requireContext(), "請先在課表選取欲刪除的課程時段", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            AlertDialog.Builder(requireContext())
+                .setTitle("刪除課程")
+                .setMessage("確定要刪除所選取的課程?")
+                .setPositiveButton("確認") { _, _ ->
+                    val toRemove = currentScheduleList.filter { item ->
+                        val (itemDay, itemPeriods) = parseScheduleItemPeriods(item.period)
+                        itemDay == currentSelectedDay && itemPeriods.any { selectedPeriodSlots.contains(it) }
+                    }
+
+                    if (toRemove.isNotEmpty()) {
+                        currentScheduleList.removeAll(toRemove)
+
+                        toRemove.forEach { removedItem ->
+                            val stillExists = currentScheduleList.any { it.courseName == removedItem.courseName }
+                            if (!stillExists) {
+                                courseStudentsMap.remove(removedItem.courseName)
+                                courseRecordsMap.remove(removedItem.courseName)
+                            }
+                        }
+
+                        // 同步儲存至本機快取與伺服器
+                        saveScheduleToLocal()
+                        syncScheduleToServer()
+                        Toast.makeText(requireContext(), "已成功刪除課程", Toast.LENGTH_SHORT).show()
+                    }
+
+                    // 清除選取並重整課表 (刪除後的課程就變成空白課程，原為空白課程就不變)
+                    selectedPeriodSlots.clear()
+                    updateTimelineForDay(currentSelectedDay)
+                    updateSelectionActionBar()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+
         btnImportCsv.setOnClickListener {
             if (selectedPeriodSlots.isEmpty()) {
                 AlertDialog.Builder(requireContext())
