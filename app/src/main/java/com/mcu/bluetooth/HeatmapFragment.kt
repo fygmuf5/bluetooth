@@ -10,7 +10,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.fragment.app.Fragment
-import java.text.SimpleDateFormat
 import java.util.*
 
 /**
@@ -31,6 +30,8 @@ class HeatmapFragment : Fragment() {
     private val studentLocations = mutableMapOf<String, PointF>()
     // 本次點名的全班學生 ID 集合 (用於未定位防呆)
     private var fullStudentRoster = setOf<String>()
+    // 伺服器端分配的 Session ID
+    private var currentSessionId: String = ""
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         val view = inflater.inflate(R.layout.fragment_heatmap, container, false)
@@ -53,13 +54,16 @@ class HeatmapFragment : Fragment() {
     }
 
     /**
-     * 先同步全班名單，成功後啟動輪詢迴圈
+     * 先同步全班名單與當前伺服器 Session ID，成功後啟動輪詢迴圈
      */
     private fun syncRosterThenStartLoop() {
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: "teacher@example.com"
-        NetworkManager.getVerifyList(email) { list ->
+        NetworkManager.getVerifyList(email) { list, sessionId ->
             if (list != null) {
                 fullStudentRoster = list.keys
+            }
+            if (!sessionId.isNullOrEmpty()) {
+                currentSessionId = sessionId
             }
             startDataSyncLoop()
         }
@@ -83,9 +87,14 @@ class HeatmapFragment : Fragment() {
     private fun fetchLocationsFromServer() {
         if (!isAdded) return
 
+        if (currentSessionId.isEmpty()) {
+            studentCountTv.text = "等待伺服器點名 Session 啟動中..."
+            return
+        }
+
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: "teacher@example.com"
         val password = "teacherPassword"
-        val sessionId = "sess_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+        val sessionId = currentSessionId
 
         NetworkManager.getStudentCoordinates(email, password, sessionId) { response ->
             if (response != null) {

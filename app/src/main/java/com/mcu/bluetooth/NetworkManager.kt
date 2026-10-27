@@ -52,27 +52,29 @@ object NetworkManager {
 
     /**
      * 1. 老師端發起/刷新點名 Session
-     * 向伺服器告知點名開始，並取得該次點名循環的 XOR 加密金鑰。
+     * 向伺服器告知點名開始，並取得該次點名循環的 XOR 加密金鑰與伺服器指派之 Session ID。
      * @param email 老師 Email
-     * @param callback 回傳 XOR Key (若失敗則回傳 null)
+     * @param callback 回傳 (xorKey, sessionId) (若失敗則回傳 null)
      */
-    fun startAttendanceSession(email: String, callback: (String?) -> Unit) {
+    fun startAttendanceSession(email: String, callback: (xorKey: String?, sessionId: String?) -> Unit) {
         val json = JSONObject().apply { put("email", email) }
         sendJsonPostWithResponse(BASE_URL + PATH_START_SESSION, json) { response ->
             val xorKey = response?.optString("xor_key")?.takeIf { it.isNotEmpty() }
-            callback(xorKey)
+            val sessionId = response?.optString("session_id")?.takeIf { it.isNotEmpty() }
+            callback(xorKey, sessionId)
         }
     }
 
     /**
      * 2. 老師端取得全班 OTP 驗證對照名單
-     * 點名開始時呼叫一次，取得全班各學號當前對應的 OTP，用於解密 BLE 藍牙廣播後進行比對。
+     * 點名開始時呼叫一次，取得全班各學號當前對應的 OTP 與當前 Session ID，用於解密 BLE 藍牙廣播後進行比對。
      * @param email 老師 Email
-     * @param callback 回傳 <學號, OTP> 映射 Map (若無資料則回傳 null)
+     * @param callback 回傳 (<學號, OTP> 映射 Map, sessionId) (若無資料則回傳 null)
      */
-    fun getVerifyList(email: String, callback: (Map<String, String>?) -> Unit) {
+    fun getVerifyList(email: String, callback: (Map<String, String>?, sessionId: String?) -> Unit) {
         val json = JSONObject().apply { put("email", email) }
         sendJsonPostWithResponse(BASE_URL + PATH_GET_OTP_LIST, json) { response ->
+            val sessionId = response?.optString("session_id")?.takeIf { it.isNotEmpty() }
             val otpMap = mutableMapOf<String, String>()
             val data = response?.optJSONObject("otp_list")
             if (data != null) {
@@ -87,25 +89,27 @@ object NetworkManager {
                     }
                 }
             }
-            Log.d("NetworkManager", "取得 OTP 名單成功，共 ${otpMap.size} 筆: $otpMap")
-            callback(otpMap.ifEmpty { null })
+            Log.d("NetworkManager", "取得 OTP 名單成功 (sessionId: $sessionId)，共 ${otpMap.size} 筆: $otpMap")
+            callback(otpMap.ifEmpty { null }, sessionId)
         }
     }
 
     /**
      * 3. 學生端取得個人專屬 OTP 與 XOR 加密金鑰
-     * 學生端按下簽到按鈕時向伺服器請求一次，取得屬於該學號當前的 OTP 權杖與加密金鑰後廣播。
+     * 學生端按下簽到按鈕時向伺服器請求一次，取得屬於該學號當前的 OTP 權杖、加密金鑰與 Session ID 後廣播。
      * @param studentId 學生學號
-     * @param callback 回傳 (otp, xorKey)
+     * @param callback 回傳 (otp, xorKey, sessionId)
      */
-    fun getStudentToken(studentId: String, callback: (otp: String?, xorKey: String?) -> Unit) {
+    fun getStudentToken(studentId: String, callback: (otp: String?, xorKey: String?, sessionId: String?) -> Unit) {
         val json = JSONObject().apply { put("student_id", studentId) }
         sendJsonPostWithResponse(BASE_URL + PATH_GET_MY_TOKEN, json) { response ->
             val otp = response?.optString("otp")?.takeIf { it.isNotEmpty() }
                 ?: response?.opt("otp")?.toString()?.takeIf { it.isNotEmpty() }
             val xorKey = response?.optString("xor_key")?.takeIf { it.isNotEmpty() }
                 ?: response?.opt("xor_key")?.toString()?.takeIf { it.isNotEmpty() }
-            callback(otp, xorKey)
+            val sessionId = response?.optString("session_id")?.takeIf { it.isNotEmpty() }
+                ?: response?.opt("session_id")?.toString()?.takeIf { it.isNotEmpty() }
+            callback(otp, xorKey, sessionId)
         }
     }
 

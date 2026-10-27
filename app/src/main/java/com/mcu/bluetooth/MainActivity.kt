@@ -187,7 +187,7 @@ class MainActivity : AppCompatActivity() {
         statusTextView.text = "狀態: 正在向伺服器取得權杖與金鑰 ($timeNow)..."
 
         // 按一次按鈕，只向伺服器端求取一次當時的 OTP 跟 key，並加密傳出去
-        NetworkManager.getStudentToken(cleanStudentId) { otp, xorKey ->
+        NetworkManager.getStudentToken(cleanStudentId) { otp, xorKey, _ ->
             runOnUiThread {
                 val updateTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                 if (!otp.isNullOrEmpty() && !xorKey.isNullOrEmpty()) {

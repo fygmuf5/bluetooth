@@ -401,9 +401,12 @@ class TeacherControlsFragment : Fragment() {
         isHeatmapLoopRunning = true
 
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: "teacher@example.com"
-        NetworkManager.getVerifyList(email) { list ->
+        NetworkManager.getVerifyList(email) { list, sessionId ->
             if (list != null) {
                 fullStudentRoster = list.keys
+            }
+            if (currentSessionId.isEmpty() && !sessionId.isNullOrEmpty()) {
+                currentSessionId = sessionId
             }
             heatmapHandler.post(heatmapRunnable)
         }
@@ -417,11 +420,15 @@ class TeacherControlsFragment : Fragment() {
     private fun fetchLocationsFromServer() {
         if (!isAdded) return
 
+        if (currentSessionId.isEmpty()) {
+            tvHeatmapStudentCount.text = "等待伺服器點名 Session 啟動中..."
+            return
+        }
+
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: "teacher@example.com"
         val password = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
             .getString("saved_password", "teacherPassword") ?: "teacherPassword"
-        val sessionId = if (currentSessionId.isNotEmpty()) currentSessionId 
-                        else "sess_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+        val sessionId = currentSessionId
 
         NetworkManager.getStudentCoordinates(email, password, sessionId) { response ->
             if (response != null && isAdded) {
@@ -599,7 +606,7 @@ class TeacherControlsFragment : Fragment() {
         isScanning = true
         btnAttendanceToggle.text = "停止並回傳"
         btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#F44336"))
-        currentSessionId = "sess_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+        currentSessionId = ""
 
         attendanceResults.clear()
         attendanceRecords.clear()
@@ -627,13 +634,21 @@ class TeacherControlsFragment : Fragment() {
     private fun performSessionRefresh() {
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
         tvTeacherStatus.text = "正在向伺服器取得點名金鑰與OTP名單..."
-        NetworkManager.startAttendanceSession(email) { xorKey ->
+        NetworkManager.startAttendanceSession(email) { xorKey, sessionId ->
             activity?.runOnUiThread {
                 if (!xorKey.isNullOrEmpty()) {
                     currentXorKey = xorKey
-                    NetworkManager.getVerifyList(email) { list ->
+                    if (!sessionId.isNullOrEmpty()) {
+                        currentSessionId = sessionId
+                        Log.d("TeacherControlsFragment", "已接收伺服器端 session_id: $currentSessionId")
+                    }
+                    NetworkManager.getVerifyList(email) { list, verifySessionId ->
                         activity?.runOnUiThread {
                             otpVerifyList = list
+                            if (currentSessionId.isEmpty() && !verifySessionId.isNullOrEmpty()) {
+                                currentSessionId = verifySessionId
+                                Log.d("TeacherControlsFragment", "從 OTP 名單接收伺服器端 session_id: $currentSessionId")
+                            }
                             selectedCourse?.courseName?.let { loadStudentsForCourse(it) }
                             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                             tvTeacherStatus.text = "✅ 點名進行中 ($timeStr 已取得密鑰與名單)"
@@ -672,7 +687,11 @@ class TeacherControlsFragment : Fragment() {
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
         val password = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
             .getString("saved_password", "teacherPassword") ?: "teacherPassword"
-        NetworkManager.clearCoordinates(email, password, currentSessionId) { _, _ -> }
+        if (currentSessionId.isNotEmpty()) {
+            val sessionToClear = currentSessionId
+            NetworkManager.clearCoordinates(email, password, sessionToClear) { _, _ -> }
+            currentSessionId = ""
+        }
 
         if (uploadMap.isEmpty()) {
             tvTeacherStatus.text = "點名結束 (無紀錄)"
