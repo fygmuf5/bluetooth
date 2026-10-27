@@ -102,7 +102,7 @@ class HeatmapFragment : Fragment() {
                 
                 studentLocations.clear()
 
-                // 1. 處理伺服器回傳之有效學生座標
+                // 1. 處理伺服器回傳之有效學生座標 (僅顯示後端回傳座標的學生)
                 val receivedIds = mutableSetOf<String>()
                 if (coordsObj != null) {
                     val keys = coordsObj.keys()
@@ -118,21 +118,18 @@ class HeatmapFragment : Fragment() {
                     }
                 }
 
-                // 2. 防呆處理：若學生在點名名單內但尚未被計算出座標，暫時歸類於 (0,0) 左上角待掃描區
-                fullStudentRoster.forEach { id ->
-                    if (!receivedIds.contains(id)) {
-                        studentLocations[id] = PointF(0f, 0f)
-                    }
-                }
-
-                // 3. 切換至 UI 主執行緒更新熱力圖 View 與統計數據文字
+                // 2. 切換至 UI 主執行緒更新熱力圖 View 與統計數據文字
                 activity?.runOnUiThread {
                     heatmapView.updateStudentLocations(studentLocations)
                     val updatedAt = response.optString("updated_at", "未知")
                     val activeCount = receivedIds.size
-                    val missingCount = fullStudentRoster.size - activeCount
+                    val rosterSize = fullStudentRoster.size
                     
-                    studentCountTv.text = "即時定位 - 已定位: $activeCount, 待掃描(左上角): $missingCount (更新: $updatedAt)"
+                    studentCountTv.text = if (rosterSize > 0) {
+                        "即時定位 - 已定位: $activeCount 人 / 應到: $rosterSize 人 (更新: $updatedAt)"
+                    } else {
+                        "即時定位 - 已定位: $activeCount 人 (更新: $updatedAt)"
+                    }
                 }
             } else {
                 Log.e("HeatmapFragment", "座標抓取失敗")

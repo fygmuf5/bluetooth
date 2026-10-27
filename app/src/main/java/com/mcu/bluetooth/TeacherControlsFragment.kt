@@ -493,20 +493,17 @@ class TeacherControlsFragment : Fragment() {
                     }
                 }
 
-                // 防呆：在名單但無座標者置於 (0, 0)
-                fullStudentRoster.forEach { id ->
-                    if (!receivedIds.contains(id)) {
-                        studentLocations[id] = PointF(0f, 0f)
-                    }
-                }
-
                 activity?.runOnUiThread {
                     if (!isAdded) return@runOnUiThread
                     heatmapView.updateStudentLocations(studentLocations)
                     val updatedAt = response.optString("updated_at", "未知")
                     val activeCount = receivedIds.size
-                    val missingCount = fullStudentRoster.size - activeCount
-                    tvHeatmapStudentCount.text = "即時定位 - 已定位: $activeCount, 待掃描(左上角): $missingCount (更新: $updatedAt)"
+                    val rosterSize = fullStudentRoster.size
+                    tvHeatmapStudentCount.text = if (rosterSize > 0) {
+                        "即時定位 - 已定位: $activeCount 人 / 應到: $rosterSize 人 (更新: $updatedAt)"
+                    } else {
+                        "即時定位 - 已定位: $activeCount 人 (更新: $updatedAt)"
+                    }
                 }
             } else {
                 Log.e("TeacherControlsFragment", "熱力圖座標抓取失敗")
