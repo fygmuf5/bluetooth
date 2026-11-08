@@ -35,6 +35,8 @@ import java.io.InputStreamReader
 import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 @SuppressLint("MissingPermission")
@@ -116,6 +118,9 @@ class TeacherControlsFragment : Fragment() {
     private var otpVerifyList: Map<String, String>? = null
     private var isScanning = false
     private var currentSessionId: String = ""
+    // 記錄已觸發補抓 OTP 的學號與時間戳，避免短時間內對同一個學號頻繁請求後端
+    private val refetchTimestampMap = ConcurrentHashMap<String, Long>()
+    private val isFetchingVerifyList = AtomicBoolean(false)
 
     // 熱力圖輪詢
     private val studentLocations = mutableMapOf<String, PointF>()
@@ -651,6 +656,8 @@ class TeacherControlsFragment : Fragment() {
         attendanceResults.clear()
         attendanceRecords.clear()
         realtimeDisplayMap.clear()
+        refetchTimestampMap.clear()
+        isFetchingVerifyList.set(false)
         selectedCourse?.courseName?.let { courseRecordsMap[it]?.clear() }
 
         allStudentsList.forEach { it.isPresent = false }
@@ -672,9 +679,11 @@ class TeacherControlsFragment : Fragment() {
     }
 
     private fun performSessionRefresh() {
-        val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
+        val email = getTeacherEmail()
+        val courseName = selectedCourse?.courseName ?: ""
+        val currentStudentIds = allStudentsList.map { it.id.trim() }.filter { it.isNotEmpty() }
         tvTeacherStatus.text = "正在向伺服器取得點名金鑰與OTP名單..."
-        NetworkManager.startAttendanceSession(email) { xorKey, sessionId ->
+        NetworkManager.startAttendanceSession(email, courseName, currentStudentIds) { xorKey, sessionId ->
             activity?.runOnUiThread {
                 if (!xorKey.isNullOrEmpty()) {
                     currentXorKey = xorKey
@@ -705,6 +714,8 @@ class TeacherControlsFragment : Fragment() {
         isScanning = false
         currentXorKey = null
         otpVerifyList = null
+        refetchTimestampMap.clear()
+        isFetchingVerifyList.set(false)
         try { bleScanner?.stopScan(scanCallback) } catch (e: Exception) {}
         btnAttendanceToggle.text = "開始點名"
         btnAttendanceToggle.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#4CAF50"))
@@ -724,9 +735,10 @@ class TeacherControlsFragment : Fragment() {
             }
         }
 
-        val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: ""
-        val password = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
-            .getString("saved_password", "teacherPassword") ?: "teacherPassword"
+        val email = getTeacherEmail()
+        val ctx = context
+        val password = ctx?.getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
+            ?.getString("saved_password", "teacherPassword") ?: "teacherPassword"
         if (currentSessionId.isNotEmpty()) {
             val sessionToClear = currentSessionId
             NetworkManager.clearCoordinates(email, password, sessionToClear) { _, _ -> }
@@ -745,7 +757,9 @@ class TeacherControlsFragment : Fragment() {
                 if (completedCount.incrementAndGet() == totalToUpload) {
                     activity?.runOnUiThread {
                         tvTeacherStatus.text = "點名結束，已同步 $totalToUpload 位學生"
-                        Toast.makeText(requireContext(), "回傳完成", Toast.LENGTH_SHORT).show()
+                        context?.let { safeCtx ->
+                            Toast.makeText(safeCtx, "回傳完成", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
@@ -772,6 +786,11 @@ class TeacherControlsFragment : Fragment() {
                 val studentId = parts[0].trim()
                 val receivedOtp = parts[1].trim()
 
+                // 核心去重：若該學號已經點名成功，則直接忽略後續重複廣播
+                if (attendanceResults.containsKey(studentId)) {
+                    return
+                }
+
                 // 尋找 OTP：同時比對完整 ID、去純數字 ID，與忽略大小寫
                 val expectedOtp = otpVerifyList?.get(studentId)
                     ?: otpVerifyList?.get(studentId.substringBefore("@"))
@@ -783,14 +802,59 @@ class TeacherControlsFragment : Fragment() {
                 if (expectedOtp != null && (receivedOtp == expectedOtp || receivedOtp.startsWith(expectedOtp))) {
                     Log.d("TeacherControls", "✅ 點名驗證成功: studentId=$studentId, address=$address")
                     processCheckInResult(studentId, address)
-                } else {
-                    val reason = when {
-                        otpVerifyList == null -> "名單同步中"
-                        expectedOtp == null -> "非本班名單"
-                        else -> "OTP驗證不符"
+                } else if (expectedOtp == null) {
+                    // 未命中名單容錯機制：若為本班名單或尚未向伺服器補抓過，觸發一次 NetworkManager.getVerifyList 補抓
+                    val isClassMember = allStudentsList.any { 
+                        it.id.equals(studentId, ignoreCase = true) || 
+                        it.id.equals(studentId.substringBefore("@"), ignoreCase = true) 
                     }
-                    Log.w("TeacherControls", "❌ OTP 驗證失敗: studentId=$studentId, receivedOtp=$receivedOtp, expectedOtp=$expectedOtp ($reason)")
-                    processCheckInFailure(studentId, reason)
+                    val lastFetchTime = refetchTimestampMap[studentId] ?: 0L
+                    val now = System.currentTimeMillis()
+                    // 若是本班名單（冷卻 4 秒可重試）或該學號尚未向後端補抓過
+                    val shouldRefetch = if (isClassMember) {
+                        (now - lastFetchTime) > 4000L
+                    } else {
+                        !refetchTimestampMap.containsKey(studentId)
+                    }
+
+                    if (shouldRefetch && isFetchingVerifyList.compareAndSet(false, true)) {
+                        refetchTimestampMap[studentId] = now
+                        val email = getTeacherEmail()
+                        Log.d("TeacherControls", "🔄 未命中 OTP，向後端補抓最新名單: studentId=$studentId (isClassMember=$isClassMember)")
+                        NetworkManager.getVerifyList(email) { updatedList, _ ->
+                            isFetchingVerifyList.set(false)
+                            if (updatedList != null) {
+                                otpVerifyList = updatedList
+                            }
+                            val retryExpectedOtp = updatedList?.get(studentId)
+                                ?: updatedList?.get(studentId.substringBefore("@"))
+                                ?: updatedList?.entries?.find { 
+                                    it.key.equals(studentId, ignoreCase = true) || 
+                                    it.key.substringBefore("@").equals(studentId.substringBefore("@"), ignoreCase = true) 
+                                }?.value
+
+                            if (retryExpectedOtp != null && (receivedOtp == retryExpectedOtp || receivedOtp.startsWith(retryExpectedOtp))) {
+                                Log.d("TeacherControls", "✅ 補抓名單後點名驗證成功: studentId=$studentId, address=$address")
+                                processCheckInResult(studentId, address)
+                            } else {
+                                val reason = when {
+                                    updatedList == null -> "名單同步中"
+                                    retryExpectedOtp == null -> "非本班名單"
+                                    else -> "OTP驗證不符"
+                                }
+                                Log.w("TeacherControls", "❌ 補抓名單後 OTP 驗證仍未通過: studentId=$studentId, receivedOtp=$receivedOtp ($reason)")
+                                processCheckInFailure(studentId, reason)
+                            }
+                        }
+                    } else {
+                        val reason = if (otpVerifyList == null) "名單同步中" else "非本班名單"
+                        Log.w("TeacherControls", "❌ OTP 驗證失敗: studentId=$studentId, receivedOtp=$receivedOtp, expectedOtp=null ($reason)")
+                        processCheckInFailure(studentId, reason)
+                    }
+                } else {
+                    // expectedOtp != null 但 receivedOtp 驗證不符
+                    Log.w("TeacherControls", "❌ OTP 驗證不符: studentId=$studentId, receivedOtp=$receivedOtp, expectedOtp=$expectedOtp")
+                    processCheckInFailure(studentId, "OTP驗證不符")
                 }
             } else {
                 Log.w("TeacherControls", "⚠️ 藍牙解密封包格式不符: $decryptedStr")
@@ -1016,7 +1080,8 @@ class TeacherControlsFragment : Fragment() {
     private fun getTeacherEmail(): String {
         val intentEmail = activity?.intent?.getStringExtra("EXTRA_EMAIL")
         if (!intentEmail.isNullOrEmpty()) return intentEmail
-        val sharedPref = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
+        val ctx = context ?: return "teacher@example.com"
+        val sharedPref = ctx.getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
         return sharedPref.getString("saved_email", "") ?: "teacher@example.com"
     }
 

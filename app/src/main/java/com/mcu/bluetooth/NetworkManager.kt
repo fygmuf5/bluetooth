@@ -1,6 +1,7 @@
 package com.mcu.bluetooth
 
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -52,12 +53,23 @@ object NetworkManager {
 
     /**
      * 1. 老師端發起/刷新點名 Session
-     * 向伺服器告知點名開始，並取得該次點名循環的 XOR 加密金鑰與伺服器指派之 Session ID。
+     * 向伺服器告知點名開始，並傳遞當前課程名稱與學生學號名單，以取得該次點名之 XOR 加密金鑰與伺服器指派之 Session ID。
      * @param email 老師 Email
+     * @param courseName 當前課程名稱
+     * @param studentIds 該課程所有學生學號列表
      * @param callback 回傳 (xorKey, sessionId) (若失敗則回傳 null)
      */
-    fun startAttendanceSession(email: String, callback: (xorKey: String?, sessionId: String?) -> Unit) {
-        val json = JSONObject().apply { put("email", email) }
+    fun startAttendanceSession(
+        email: String,
+        courseName: String = "",
+        studentIds: List<String> = emptyList(),
+        callback: (xorKey: String?, sessionId: String?) -> Unit
+    ) {
+        val json = JSONObject().apply {
+            put("email", email)
+            put("course_name", courseName)
+            put("student_ids", org.json.JSONArray(studentIds))
+        }
         sendJsonPostWithResponse(BASE_URL + PATH_START_SESSION, json) { response ->
             val xorKey = response?.optString("xor_key")?.takeIf { it.isNotEmpty() }
             val sessionId = response?.optString("session_id")?.takeIf { it.isNotEmpty() }
