@@ -803,19 +803,21 @@ class TeacherControlsFragment : Fragment() {
                     Log.d("TeacherControls", "✅ 點名驗證成功: studentId=$studentId, address=$address")
                     processCheckInResult(studentId, address)
                 } else if (expectedOtp == null) {
-                    // 未命中名單容錯機制：若為本班名單或尚未向伺服器補抓過，觸發一次 NetworkManager.getVerifyList 補抓
                     val isClassMember = allStudentsList.any { 
                         it.id.equals(studentId, ignoreCase = true) || 
                         it.id.equals(studentId.substringBefore("@"), ignoreCase = true) 
                     }
+
+                    // 🛡️ 防護修復：非本班學生在本地直接阻擋，不進行向伺服器補抓名單
+                    if (!isClassMember) {
+                        Log.w("TeacherControls", "攔截到非本班學生訊號: $studentId")
+                        processCheckInFailure(studentId, "非本班名單")
+                        return
+                    }
+
                     val lastFetchTime = refetchTimestampMap[studentId] ?: 0L
                     val now = System.currentTimeMillis()
-                    // 若是本班名單（冷卻 4 秒可重試）或該學號尚未向後端補抓過
-                    val shouldRefetch = if (isClassMember) {
-                        (now - lastFetchTime) > 4000L
-                    } else {
-                        !refetchTimestampMap.containsKey(studentId)
-                    }
+                    val shouldRefetch = (now - lastFetchTime) > 4000L // 只有本班名單且冷卻超過 4 秒才補抓
 
                     if (shouldRefetch && isFetchingVerifyList.compareAndSet(false, true)) {
                         refetchTimestampMap[studentId] = now
@@ -881,6 +883,18 @@ class TeacherControlsFragment : Fragment() {
                 return@runOnUiThread
             }
 
+            var student = allStudentsList.find { 
+                it.id.equals(id, ignoreCase = true) || 
+                it.id.equals(id.substringBefore("@"), ignoreCase = true) 
+            }
+
+            if (student == null) {
+                // 🛡️ 防護修復：非本班名單學生絕對不可以加入 allStudentsList！
+                Log.w("TeacherControls", "收到非本班學生廣播: $id，予以阻擋不新增入名單")
+                processCheckInFailure(id, "非本班名單")
+                return@runOnUiThread
+            }
+
             // 以學號 (id) 作為唯一鍵，記錄設備地址與時間
             attendanceResults[id] = address
             attendanceRecords[address] = Pair(id, timeString)
@@ -889,28 +903,21 @@ class TeacherControlsFragment : Fragment() {
             currentCourseRecords?.remove("Manual_$id")
             currentCourseRecords?.put(address, Pair(id, timeString))
 
-            var student = allStudentsList.find { it.id == id }
-            val studentName = student?.name ?: ""
+            val studentName = student.name
             val nameDisplay = if (studentName.isNotEmpty()) "$studentName ($id)" else id
             realtimeDisplayMap.remove(id)
             realtimeDisplayMap[id] = "[$nameDisplay] ✅ 點名成功 ($timeString)"
             updateListView()
 
-            if (student == null) {
-                // 動態加入不在預設名單中的學號，確保點名卡片與即時列表同步顯示
-                student = StudentStatus(id, true)
-                allStudentsList.add(student)
-                allStudentsList.sortWith { a, b -> CourseScheduleParser.compareStudentIds(a.id, b.id) }
-                filterStudents(etStudentSearch.text.toString())
-            } else if (!student.isPresent) {
+            if (!student.isPresent) {
                 student.isPresent = true
                 val adapter = rvStudentGrid.adapter
                 if (adapter is StudentGridAdapter) {
                     val index = filteredStudentsList.indexOf(student)
                     if (index != -1) adapter.notifyItemChanged(index)
                 }
+                updateAttendanceSummary()
             }
-            updateAttendanceSummary()
         }
     }
 

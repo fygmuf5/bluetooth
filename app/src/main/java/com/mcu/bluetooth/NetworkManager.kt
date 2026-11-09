@@ -108,20 +108,20 @@ object NetworkManager {
 
     /**
      * 3. 學生端取得個人專屬 OTP 與 XOR 加密金鑰
-     * 學生端按下簽到按鈕時向伺服器請求一次，取得屬於該學號當前的 OTP 權杖、加密金鑰與 Session ID 後廣播。
+     * 學生端按下簽到按鈕時向伺服器請求一次，取得屬於該學號當前的 OTP 權杖、加密金鑰與選課狀態後廣播。
      * @param studentId 學生學號
-     * @param callback 回傳 (otp, xorKey, sessionId)
+     * @param callback 回傳 (isSuccess, isEnrolled, otp, xorKey)
      */
-    fun getStudentToken(studentId: String, callback: (otp: String?, xorKey: String?, sessionId: String?) -> Unit) {
+    fun getStudentToken(studentId: String, callback: (isSuccess: Boolean, isEnrolled: Boolean, otp: String?, xorKey: String?) -> Unit) {
         val json = JSONObject().apply { put("student_id", studentId) }
         sendJsonPostWithResponse(BASE_URL + PATH_GET_MY_TOKEN, json) { response ->
+            val isSuccess = response != null && response.optBoolean("success", false)
+            val isEnrolled = response?.optBoolean("is_enrolled", false) ?: false
             val otp = response?.optString("otp")?.takeIf { it.isNotEmpty() }
                 ?: response?.opt("otp")?.toString()?.takeIf { it.isNotEmpty() }
             val xorKey = response?.optString("xor_key")?.takeIf { it.isNotEmpty() }
                 ?: response?.opt("xor_key")?.toString()?.takeIf { it.isNotEmpty() }
-            val sessionId = response?.optString("session_id")?.takeIf { it.isNotEmpty() }
-                ?: response?.opt("session_id")?.toString()?.takeIf { it.isNotEmpty() }
-            callback(otp, xorKey, sessionId)
+            callback(isSuccess, isEnrolled, otp, xorKey)
         }
     }
 

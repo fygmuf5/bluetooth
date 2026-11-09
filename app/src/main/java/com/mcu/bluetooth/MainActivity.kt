@@ -187,9 +187,18 @@ class MainActivity : AppCompatActivity() {
         statusTextView.text = "狀態: 正在向伺服器取得權杖與金鑰 ($timeNow)..."
 
         // 按一次按鈕，只向伺服器端求取一次當時的 OTP 跟 key，並加密傳出去
-        NetworkManager.getStudentToken(cleanStudentId) { otp, xorKey, _ ->
+        NetworkManager.getStudentToken(cleanStudentId) { isSuccess, isEnrolled, otp, xorKey ->
             runOnUiThread {
                 val updateTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+                // 🛡️ 防護修復：非本班學生禁止啟動藍牙廣播
+                if (!isSuccess || !isEnrolled) {
+                    statusTextView.text = "狀態: 簽到失敗 (您非本課程名單學生)"
+                    Toast.makeText(this, "您非本課程修課學生，無法參與本次點名！", Toast.LENGTH_LONG).show()
+                    stopBleAdvertising()
+                    return@runOnUiThread
+                }
+
                 if (!otp.isNullOrEmpty() && !xorKey.isNullOrEmpty()) {
                     // 對學號與 OTP 進行 XOR 加密並發送 BLE 廣播
                     broadcastEncryptedMessage(cleanStudentId, otp, xorKey)
