@@ -475,7 +475,7 @@ class TeacherControlsFragment : Fragment() {
 
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: "teacher@example.com"
         val password = requireContext().getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
-            .getString("saved_password", "teacherPassword") ?: "teacherPassword"
+            .getString("saved_password", "teacher123") ?: "teacher123"
         val sessionId = currentSessionId
 
         NetworkManager.getStudentCoordinates(email, password, sessionId) { response ->
@@ -738,10 +738,15 @@ class TeacherControlsFragment : Fragment() {
         val email = getTeacherEmail()
         val ctx = context
         val password = ctx?.getSharedPreferences("AttendanceApp", Context.MODE_PRIVATE)
-            ?.getString("saved_password", "teacherPassword") ?: "teacherPassword"
+            ?.getString("saved_password", "teacher123") ?: "teacher123"
+        val sessionToClear = currentSessionId
         if (currentSessionId.isNotEmpty()) {
-            val sessionToClear = currentSessionId
+            // 1. 清除熱力圖座標
             NetworkManager.clearCoordinates(email, password, sessionToClear) { _, _ -> }
+            // 2. 🛡️ 通知伺服器銷毀 Session，避免金鑰殘留給其他老師
+            NetworkManager.stopAttendanceSession(email, sessionToClear) { success ->
+                Log.d("TeacherControls", "已通知伺服器結束 Session: $sessionToClear (成功: $success)")
+            }
             currentSessionId = ""
         }
 
@@ -753,7 +758,8 @@ class TeacherControlsFragment : Fragment() {
         val completedCount = AtomicInteger(0)
         val totalToUpload = uploadMap.size
         uploadMap.forEach { (address, pair) ->
-            NetworkManager.syncAttendance(pair.first, address) {
+            val courseId = currentSessionId.toIntOrNull() ?: sessionToClear.toIntOrNull() ?: 1
+            NetworkManager.syncAttendance(pair.first, address, courseId) {
                 if (completedCount.incrementAndGet() == totalToUpload) {
                     activity?.runOnUiThread {
                         tvTeacherStatus.text = "點名結束，已同步 $totalToUpload 位學生"

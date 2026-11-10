@@ -93,7 +93,7 @@ class HeatmapFragment : Fragment() {
         }
 
         val email = activity?.intent?.getStringExtra("EXTRA_EMAIL") ?: "teacher@example.com"
-        val password = "teacherPassword"
+        val password = "teacher123"
         val sessionId = currentSessionId
 
         NetworkManager.getStudentCoordinates(email, password, sessionId) { response ->

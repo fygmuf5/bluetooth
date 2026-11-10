@@ -98,12 +98,11 @@ class RoleSelectionActivity : AppCompatActivity() {
             NetworkManager.login(fullEmail, password, deviceId) { success, message ->
                 runOnUiThread {
                     if (success) {
-                        // 依據帳號字首判斷角色：若全為數字代表學號 (STUDENT)，否則為教師 (TEACHER)
-                        val localPart = fullEmail.substringBefore("@")
-                        val role = if (localPart.isNotEmpty() && localPart.all { it.isDigit() }) {
-                            "STUDENT"
-                        } else {
+                        // 🛡️ 正確依據信箱網域判斷：@mail.mcu.edu.tw 為教職員，@me.mcu.edu.tw 為學生
+                        val role = if (fullEmail.endsWith("@mail.mcu.edu.tw", ignoreCase = true)) {
                             "TEACHER"
+                        } else {
+                            "STUDENT"
                         }
                         
                         // 儲存登入憑證至 SharedPreferences 以利後續 API 驗證與免登入

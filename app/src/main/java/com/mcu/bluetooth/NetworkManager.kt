@@ -107,6 +107,23 @@ object NetworkManager {
     }
 
     /**
+     * 老師端結束點名 Session
+     * 告知伺服器本次點名已結束，伺服器立即銷毀金鑰，防止下位老師金鑰衝突。
+     */
+    fun stopAttendanceSession(email: String, sessionId: String, courseId: Int = 1, callback: ((Boolean) -> Unit)? = null) {
+        val json = JSONObject().apply {
+            put("email", email)
+            put("session_id", sessionId)
+            put("course_id", courseId)
+        }
+        sendJsonPostWithResponse(BASE_URL + "/api/session/stop", json) { response ->
+            val success = response != null && response.optBoolean("success", false)
+            Log.d("NetworkManager", "結束 Session 回應: $response")
+            callback?.invoke(success)
+        }
+    }
+
+    /**
      * 3. 學生端取得個人專屬 OTP 與 XOR 加密金鑰
      * 學生端按下簽到按鈕時向伺服器請求一次，取得屬於該學號當前的 OTP 權杖、加密金鑰與選課狀態後廣播。
      * @param studentId 學生學號
@@ -209,12 +226,14 @@ object NetworkManager {
      * 點名結束時，將成功簽到的學生資訊與裝置位址同步上傳。
      * @param studentInfo 學生學號/資訊
      * @param address 裝置藍牙位址
+     * @param courseId 課程 ID
      * @param callback 回傳是否同步成功
      */
-    fun syncAttendance(studentInfo: String, address: String, callback: (Boolean) -> Unit) {
+    fun syncAttendance(studentInfo: String, address: String, courseId: Int = 1, callback: (Boolean) -> Unit) {
         val json = JSONObject().apply {
             put("student_info", studentInfo)
             put("device_address", address)
+            put("course_id", courseId)
         }
         sendJsonPost(BASE_URL + PATH_ATTENDANCE, json, callback)
     }

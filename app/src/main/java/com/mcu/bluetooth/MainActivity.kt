@@ -335,6 +335,16 @@ class MainActivity : AppCompatActivity() {
 
         // 啟動藍牙廣播
         bleAdvertiser?.startAdvertising(settings, data, scanResponse, currentAdvertiseCallback)
+
+        // 🛡️ 防護修復：發射 15 秒後自動停止廣播，避免殘留空中干擾後續其他老師點名
+        handler.postDelayed({
+            stopBleAdvertising()
+            runOnUiThread {
+                if (statusTextView.text.toString().contains("廣播簽到訊號中")) {
+                    statusTextView.text = "狀態: 簽到訊號發送完成 (藍牙廣播已自動停止)"
+                }
+            }
+        }, 15000L) // 15 秒自動停止
     }
 
     /**
